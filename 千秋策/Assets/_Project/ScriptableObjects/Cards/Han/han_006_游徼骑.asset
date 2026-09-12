@@ -1,0 +1,32 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bfcf2cc80a34fa94dadbc55e6db77a79, type: 3}
+  m_Name: han_006_游徼骑
+  m_EditorClassIdentifier: 
+  cardId: han_006
+  cardName: 游徼骑
+  dynasty: 汉
+  rarity: 0
+  cardType: 0
+  artwork: {fileID: 0}
+  flavorText: 繇役轻骑，往来如风。
+  effectText: 
+  deploymentCost: 3
+  actionCost: 2
+  actionCount: 2
+  atk: 3
+  hp: 4
+  unitType: 1
+  weight: 1
+  keywords:
+  - 0
+  - 4
