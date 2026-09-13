@@ -23,6 +23,18 @@ public class Deck
         }
     }
 
+    /// <summary>
+    /// 往牌堆里加一张(「召唤(牌堆)」效果用,策划案§4.3)。
+    /// 放回**牌堆顶**(下一张就摸到),这是"召唤"类卡的本意:立刻补一张资源。
+    /// </summary>
+    public void Add(CardData card, bool toTop = true)
+    {
+        if (card == null) return;
+
+        if (toTop) cards.Insert(0, card);
+        else cards.Add(card);
+    }
+
     public CardData Draw()
     {
         if (cards.Count == 0) return null;

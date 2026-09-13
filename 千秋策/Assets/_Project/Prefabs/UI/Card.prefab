@@ -434,8 +434,8 @@ MonoBehaviour:
   m_fontMaterials: []
   m_fontColor32:
     serializedVersion: 2
-    rgba: 4294967295
-  m_fontColor: {r: 1, g: 1, b: 1, a: 1}
+    rgba: 4278190080
+  m_fontColor: {r: 0, g: 0, b: 0, a: 1}
   m_enableVertexGradient: 0
   m_colorMode: 3
   m_fontColorGradient:
@@ -1198,6 +1198,7 @@ GameObject:
   - component: {fileID: 4383644001999494817}
   - component: {fileID: 4523236731626735221}
   - component: {fileID: 2633905696325560876}
+  - component: {fileID: 7918463205517263841}
   m_Layer: 5
   m_Name: Card
   m_TagString: Untagged
@@ -1352,8 +1353,24 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cdbb62f3b059b134d8e8e6f00d8c4223, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  hoverLift: 70
-  duration: 0.12
+  previewDelay: 0.5
+--- !u!114 &7918463205517263841
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5292469456475676678}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7c1d9a4e2b6f48d0a3e5c8f41b27d690, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  dragScale: 1.06
+  returnDuration: 0.18
+  disabledAlpha: 0.5
+  shakeDuration: 0.18
+  shakeStrength: 8
 --- !u!1 &6407624965406947293
 GameObject:
   m_ObjectHideFlags: 0

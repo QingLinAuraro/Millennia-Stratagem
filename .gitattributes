@@ -1,0 +1,40 @@
+# 统一换行,避免跨平台协作时 Unity 的 YAML 资源被整文件重写(那样 diff 会全红)
+* text=auto eol=lf
+
+# Unity 的文本资源
+*.cs        text eol=lf
+*.unity     text eol=lf
+*.prefab    text eol=lf
+*.asset     text eol=lf
+*.meta      text eol=lf
+*.controller text eol=lf
+*.anim      text eol=lf
+*.mat       text eol=lf
+*.asmdef    text eol=lf
+*.md        text eol=lf
+*.py        text eol=lf
+*.json      text eol=lf
+*.xml       text eol=lf
+*.txt       text eol=lf
+
+# 二进制资源:不做行尾转换,也别当文本 diff
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.tga       binary
+*.psd       binary
+*.exr       binary
+*.xlsx      binary
+*.ttf       binary
+*.otf       binary
+*.dll       binary
+*.so        binary
+*.dylib     binary
+*.bundle    binary
+
+# 场景/预制体的合并冲突必须用 Unity 自带的 YAML 合并工具处理,别用默认文本合并:
+#   git config merge.unityyamlmerge.name "Unity SmartMerge"
+#   git config merge.unityyamlmerge.driver "\"<Unity>/Editor/Data/Tools/UnityYAMLMerge.exe\" merge -p %O %B %A %A"
+# 配好之后可以把下面两行的注释去掉:
+# *.unity  merge=unityyamlmerge
+# *.prefab merge=unityyamlmerge

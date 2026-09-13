@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bfcf2cc80a34fa94dadbc55e6db77a79, type: 3}
+  m_Name: qin_021_移民实边
+  m_EditorClassIdentifier: 
+  cardId: qin_021
+  cardName: 移民实边
+  dynasty: 秦
+  rarity: 2
+  cardType: 1
+  artwork: {fileID: 0}
+  flavorText: 明赏罚，劝耕战，民勇于公战，怯于私斗。
+  effectText: 抽取3张牌
+  deploymentCost: 6
+  actionCost: 0
+  actionCount: 0
+  atk: 0
+  hp: 0
+  unitType: 4
+  weight: 0
+  keywords: []
+  targetType: 0

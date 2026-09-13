@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bfcf2cc80a34fa94dadbc55e6db77a79, type: 3}
+  m_Name: qin_008_攒射
+  m_EditorClassIdentifier: 
+  cardId: qin_008
+  cardName: 攒射
+  dynasty: 秦
+  rarity: 0
+  cardType: 1
+  artwork: {fileID: 0}
+  flavorText: 劲弩攒发，矢如飞蝗。
+  effectText: 对一名敌方兵牌造成3点伤害
+  deploymentCost: 2
+  actionCost: 0
+  actionCount: 0
+  atk: 0
+  hp: 0
+  unitType: 4
+  weight: 0
+  keywords: []
+  targetType: 1

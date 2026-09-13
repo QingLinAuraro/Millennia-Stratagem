@@ -141,3 +141,11 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# ---------------------------- 项目整理补充 ----------------------------
+# Unity 场景偶尔留下的崩溃恢复文件(Game.unity~RFxxxx.TMP),不是工程内容
+*.TMP
+*.unity~*
+
+# _final_check.py 的基准副本是工具依赖(不是自动备份),必须入库
+!Docs/数据表demo.xlsx.bak
