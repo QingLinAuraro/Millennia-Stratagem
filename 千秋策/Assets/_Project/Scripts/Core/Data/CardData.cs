@@ -4,7 +4,8 @@ using UnityEngine;
 
 public enum CardType { Unit, Tactic }                                // 兵牌 / 策略牌
 public enum UnitType { Infantry, Cavalry, Archer, Support, Strategy }          // 步 / 骑 / 弓 / 器 / 策
-public enum Rarity { Standard, Limited, Special, Elite }             // 普通/稀有/史诗/传说
+// 普通/稀有/史诗/传说 + 后续档位(红)。卡面小方框已按 白→蓝→紫→金→红 配好色,暂时没有卡用 Future
+public enum Rarity { Standard, Limited, Special, Elite, Future }
 public enum WeightClass { Light, Medium, Heavy }                     // 轻/中/重
 public enum Keyword { Blitz, Ambush, Guard, BloodBattle, DoubleStrike,
                       HeavyArmor, DrawCards, Summon, Heal, Oath }    // 策划案§4.3词条

@@ -36,12 +36,16 @@ public enum CardPlayResult
 ///         (只有 enemyHandZone 是手连的)。找不到己方中军会 LogError,兵种牌没地方落;
 ///         handUI 找不到则打出的牌不移除、「拖回手牌区 = 取消」判定失效;
 ///         buildPrefab 留空时编辑器里会按 Assets/_Project/Prefabs/Battle/Build.prefab 自动认领,认领不到只警告、建筑不摆;
-///         卡牌预制体取自 handUI 的 cardPrefab,那个没填就 LogError、部署不了单位。
+///         战场卡面取自 fieldCardPrefab(留空 → HandUI 上的战场卡引用 → 编辑器里按路径认领
+///         Assets/_Project/Prefabs/UI/CardsInBattle.prefab → 最后退回手牌用的 Card.prefab 并警告),
+///         全都没有才 LogError、部署不了单位。
 ///   常调:
 ///     · rowHeight:每排钉死的高度;调大 = 每条排更胖(5 条排总高会超出 RowsContainer 而溢出),调小 = 每条排更扁、缝更大;改完要保证 5×rowHeight + 4×容器 spacing 还塞得进容器。
 ///     · memberGap:链上相邻成员之间的间距,这段空隙是留给 buff 图标的;调大 = 卡与卡隔得开、一条排横向更挤,调小 = 贴在一起,0 就是完全挨着。
-///     · fieldCardScale:战场小卡相对卡面设计尺寸 150×200 的缩放,0.7 → 格子 105×140;调大 = 卡面更清楚但一条排能放的成员更少,调小 = 能放更多但字变小;格子尺寸和卡面缩放都由它算,两边一起变。
-///     · allowFieldHoverPreview:战场小卡要不要 3 秒悬停预览;默认关(拖着牌从上面经过容易误弹),想让玩家在战场上看卡详情就勾上。
+///     · fieldCardPrefab:换战场卡面就换这个预制体(CardsInBattle.prefab)。它只影响战场,手牌与悬停预览仍然用 Card.prefab。
+///     · fieldCardScale:战场卡相对卡面设计尺寸 150×200 的缩放,0.7 → 格子 105×140;调大 = 卡面更清楚但一条排能放的成员更少,调小 = 能放更多但字变小;格子尺寸和卡面缩放都由它算,两边一起变。
+///     · fieldHoverPreview:战场卡要不要悬停弹完整信息卡(默认开)。关掉 = 战场上只有卡面那点信息,看不到效果文案;
+///       嫌拖着牌经过时误弹就关掉。它只控制开不开,弹多快在 CardsInBattle.prefab 的 CardHover.fieldPreviewDelay 上。
 ///     · insertMarkerWidth:拖兵种牌时那根落点竖条的宽度;场景里现在填的是 0,也就是这根提示条是关着的,想看到「松手会插在哪个缝」就填 3~6。
 ///     · loadBuildingsAtStart:开局要不要摆大营/军械库/粮草;关掉后场上没有建筑(但容量仍按建筑占位扣过,后军只剩 1 格),想空场调试或自己做布阵就关掉。
 ///     · lockRowLayout:要不要由本脚本钉死行高与间距;关掉就完全听 RowsContainer 的 VerticalLayoutGroup,排里一塞卡整排会被撑高、5 条排挤走位。
@@ -61,6 +65,9 @@ public class BattlefieldManager : MonoBehaviour
 
     /// <summary>编辑器里自动认领建筑预制体用的路径(Inspector 上没拖时才用)</summary>
     private const string BuildPrefabPath = "Assets/_Project/Prefabs/Battle/Build.prefab";
+
+    /// <summary>编辑器里自动认领战场卡面用的路径(Inspector 上没拖时才用)</summary>
+    private const string FieldCardPrefabPath = "Assets/_Project/Prefabs/UI/CardsInBattle.prefab";
 
     private static BattlefieldManager instance;
 
@@ -116,13 +123,21 @@ public class BattlefieldManager : MonoBehaviour
     [SerializeField] private bool lockRowLayout = true;
 
     [Header("战场小卡")]
+    [Tooltip("战场卡面的预制体(CardsInBattle.prefab:字号更大的精简卡面 —— 只有行动费用/攻血/兵种/朝代/插画,\n" +
+             "没有卡名、关键词、效果和稀有度小方框)。留空 → 先借 HandUI 的战场卡引用,\n" +
+             "还是没有就在编辑器里按路径自动认领 CardsInBattle.prefab;\n" +
+             "连那份都认领不到才退回手牌用的 Card.prefab(字会小、还占着费用区和描述区)。\n" +
+             "必须是 Project 里的资产,不要拖场景实例")]
+    [SerializeField] private CardDisplay fieldCardPrefab;
     [Tooltip("部署进排里的兵牌缩到多大(1 = 和手牌一样大)。卡面内容整体等比缩放:\n" +
              "只改 rect 不会放大字号和插画,整体缩放才是真的同比例变小。\n" +
              "0.7 → 150×200 的卡面正好变成 105×140,填满 105×140 的布局格子")]
     [Range(0.2f, 1.5f)]
     [SerializeField] private float fieldCardScale = 0.7f;
-    [Tooltip("战场上的兵牌还要不要 3 秒悬停预览(拖着牌从上面经过时容易误弹)")]
-    [SerializeField] private bool allowFieldHoverPreview = false;
+    [Tooltip("战场上的兵牌悬停时能不能弹出完整信息卡(鼠标停在牌上不动,按卡面上的 fieldPreviewDelay 秒数弹)\n" +
+             "关掉 = 战场上只能看卡面那点信息,看不到效果文案。这是新字段(老字段名叫 allowFieldHoverPreview、默认关),\n" +
+             "默认开着 —— 拖着牌从排上路过时可能误弹,嫌烦就取消勾选")]
+    [SerializeField] private bool fieldHoverPreview = true;
 
     [Header("建筑锚点(策划案§2.3:大营在中军,军械库/粮草在后军)")]
     [Tooltip("建筑用的预制体(Build.prefab:一张建筑图 + 角上一颗 HP 数字)")]
@@ -467,15 +482,44 @@ public class BattlefieldManager : MonoBehaviour
         return go != null ? go.transform as RectTransform : null;
     }
 
-    private CardDisplay ResolveCardPrefab()
+    /// <summary>
+    /// 拿到战场卡面的预制体。优先级:Inspector 拖的 fieldCardPrefab → HandUI 上的战场卡引用 →
+    /// 编辑器里按路径自动认领 CardsInBattle.prefab → 最后退回手牌用的 Card.prefab(老行为,能跑但字小)。
+    /// </summary>
+    private CardDisplay ResolveFieldCardPrefab()
     {
-        if (handUI == null) handUI = FindObjectOfType<HandUI>();
-        if (handUI == null || handUI.CardPrefab == null)
+        if (fieldCardPrefab == null)
         {
-            Debug.LogError("[BattlefieldManager] 拿不到 Card.prefab(HandUI 的 cardPrefab 没赋值),部署不了单位。", this);
-            return null;
+            if (handUI == null) handUI = FindObjectOfType<HandUI>();
+            if (handUI != null) fieldCardPrefab = handUI.BattleCardPrefab;
         }
-        return handUI.CardPrefab;
+
+        if (fieldCardPrefab == null)
+        {
+#if UNITY_EDITOR
+            fieldCardPrefab = UnityEditor.AssetDatabase
+                .LoadAssetAtPath<CardDisplay>(FieldCardPrefabPath);
+            if (fieldCardPrefab != null)
+                Debug.Log($"[BattlefieldManager] fieldCardPrefab 没赋值,已按路径自动认领 {FieldCardPrefabPath}", this);
+#endif
+        }
+
+        if (fieldCardPrefab == null)
+        {
+            // 兜底:老的手牌卡面也能当战场卡用(只是字号小、还占着费用区和描述区)
+            if (handUI == null) handUI = FindObjectOfType<HandUI>();
+            fieldCardPrefab = handUI != null ? handUI.CardPrefab : null;
+
+            if (fieldCardPrefab != null)
+                Debug.LogWarning(
+                    $"[BattlefieldManager] 找不到战场卡面 {FieldCardPrefabPath},已退回手牌用的 Card.prefab:" +
+                    "战场上的字会比设计的小。请确认 CardsInBattle.prefab 还在,或在 Inspector 上指定 fieldCardPrefab。", this);
+        }
+
+        if (fieldCardPrefab == null)
+            Debug.LogError("[BattlefieldManager] 拿不到任何战场卡面预制体,部署不了单位。", this);
+
+        return fieldCardPrefab;
     }
 
     private static Camera EventCameraFor(RectTransform rect)
@@ -1139,7 +1183,7 @@ public class BattlefieldManager : MonoBehaviour
     /// </summary>
     private FieldUnit SpawnUnit(CardData card, BattleRow row, int siblingIndex, BattleSide side)
     {
-        var prefab = ResolveCardPrefab();
+        var prefab = ResolveFieldCardPrefab();
         if (prefab == null || row == null) return null;
 
         var slot = CreateSlot(row, siblingIndex, "Unit_" + card.cardId);
@@ -1148,10 +1192,12 @@ public class BattlefieldManager : MonoBehaviour
         view.name = "Unit_" + card.cardId;
         view.Bind(card, CardViewMode.Field);
 
-        // 战场小卡:悬停预览默认关掉(拖着牌从上面路过时容易误弹),手牌拖动组件也不能生效
+        // 战场卡:能悬停看完整信息(卡面只有行动费用/攻血/兵种/朝代,效果文案在预览里)。
+        // CardHover 的战场布局由 FieldUnit.Init → Bind(FieldUnit) 喂进去,预览显示的是场上当前值
         var hover = view.GetComponent<CardHover>();
-        if (hover != null) hover.enabled = allowFieldHoverPreview;
+        if (hover != null) hover.enabled = fieldHoverPreview;
 
+        // 拖动出牌组件在战场卡上绝不能生效(按住战场卡会变成把它当手牌打出去)
         var drag = view.GetComponent<CardDragPlay>();
         if (drag != null) drag.enabled = false;
 

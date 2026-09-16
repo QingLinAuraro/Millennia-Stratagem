@@ -3244,6 +3244,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   cardPrefab: {fileID: 4523236731626735221, guid: 7d1b44ab173a7c845a4c120db412aeec, type: 3}
+  battleCardPrefab: {fileID: 3553309683854948894, guid: 886e4dab6143ec443be9e123188a7c1e, type: 3}
   handRoot: {fileID: 229679569}
   fanLayout: {fileID: 229679572}
   hoverPreviewRoot: {fileID: 843739234}
@@ -4343,10 +4344,6 @@ PrefabInstance:
       propertyPath: testData
       value: 
       objectReference: {fileID: 11400000, guid: 67d92076d98dd5e7fa1ceb4f9bca7ff7, type: 2}
-    - target: {fileID: 4523236731626735221, guid: 7d1b44ab173a7c845a4c120db412aeec, type: 3}
-      propertyPath: borderImage
-      value: 
-      objectReference: {fileID: 916047071}
     - target: {fileID: 5292469456475676678, guid: 7d1b44ab173a7c845a4c120db412aeec, type: 3}
       propertyPath: m_Name
       value: Card
@@ -4382,8 +4379,9 @@ MonoBehaviour:
   rowHeight: 144
   memberGap: 20
   lockRowLayout: 1
+  fieldCardPrefab: {fileID: 3553309683854948894, guid: 886e4dab6143ec443be9e123188a7c1e, type: 3}
   fieldCardScale: 0.7
-  allowFieldHoverPreview: 0
+  fieldHoverPreview: 1
   buildPrefab: {fileID: 3395130883880239539, guid: 2a0724586730976438ddf285d4647bbe, type: 3}
   loadBuildingsAtStart: 1
   buildings:

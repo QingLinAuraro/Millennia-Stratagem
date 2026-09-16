@@ -12,11 +12,14 @@ using UnityEngine;
 ///         没有 Instance、也不会自举:全场景就这一份,BattlefieldManager / BattleMessageUI 反而要用
 ///         FindObjectOfType<HandUI>() 回过头来找它。删掉或禁用 = 整局没有我方手牌表现层:抽牌事件不再生成卡面
 ///         (数据层照常进账)、打出的牌不会被移除、「拖回手牌区 = 取消」也失效。
-///   引用:4 个引用全部靠手连,脚本里没有任何自动查找(只有 hoverPreviewRoot 有按名字的兜底)。
+///   引用:5 个引用全部靠手连,脚本里没有任何自动查找(只有 hoverPreviewRoot 有按名字的兜底)。
 ///         · cardPrefab:必须拖 Project 窗口里的 Assets/_Project/Prefabs/UI/Card.prefab 资产。
 ///           留空 → Awake 打 LogError,OnCardDrawn 直接 return,一张牌都不生成。
-///           拖成场景里的实例 → 同样 LogError:那个实例上被 Inspector 覆盖过的字段(尤其 borderImage)会被原样
-///           复制到每一张抽出来的卡上,典型事故是把整块游戏背景染成稀有度颜色。
+///           拖成场景里的实例 → 同样 LogError:那个实例上被 Inspector 覆盖过的字段(尤其 rarityImage)
+///           会被原样复制到每一张抽出来的卡上,典型事故是把整块游戏背景染成稀有度颜色。
+///         · battleCardPrefab:战场卡面 CardsInBattle.prefab,**只给 BattlefieldManager 拿去生战场卡**,
+///           手牌和悬停预览都不用它。留空不算错 —— BattlefieldManager 会自己按路径认领,
+///           认领不到才退回 cardPrefab 并警告(那样战场上的字会偏小)。
 ///         · handRoot:必须拖 HandArea1 的 RectTransform(800x140,底边贴着屏幕底边)。
 ///           留空 → LogError,而且 OnCardDrawn 直接 return(手牌没地方摆);同时 HandRect 为 null,
 ///           BattlefieldManager 判「松手点在不在手牌区里」时恒为 false —— 策略卡的「拖离手牌区即释放」失效。
@@ -25,10 +28,12 @@ using UnityEngine;
 ///           报错文案写的是「手牌会全部叠在手牌区中心」,和实际不符)。
 ///           注意 CardDragPlay 是自己 GetComponentInParent<FanLayout>() 找扇形的,所以这里留空不影响拖动和变灰。
 ///         · hoverPreviewRoot:留空则 CardHoverPreview.Ensure 按名字找场景里的 hover / Hover;两个都找不到只打
-///           LogWarning,悬停不弹预览,手牌其余功能照常。它只决定预览出现在哪儿,预览多大、多快淡入在 CardHoverPreview 上。
-///   常调:本组件没有数值参数,四个引用都是「配对」用的,能调出来的效果其实都在别人身上:
-///     · cardPrefab:换卡面样式就换这个预制体(手牌、战场小卡、悬停预览三处都取自这里)。
+///           LogWarning,悬停不弹预览,手牌其余功能照常。它只决定预览落在哪个坐标系里,
+///           具体弹在被悬停那张牌的哪个方位由 CardHoverPreview.PlaceNear 算(手牌/战场同一套规则)。
+///   常调:本组件没有数值参数,五个引用都是「配对」用的,能调出来的效果其实都在别人身上:
+///     · cardPrefab:换手牌样式就换这个预制体(手牌 + 悬停预览两处都取自这里)。
 ///       换完记得回头核对 Card.prefab 上 CardDisplay / CardHover / CardDragPlay 的字段,并确认它仍是资产而不是场景实例。
+///     · battleCardPrefab:换战场卡面就换它(CardsInBattle.prefab),换完核对它身上的 CardDisplay / CardHover 字段。
 ///     · handRoot:它同时是「手牌区矩形」,一件事两个用途 —— 卡牌扇形以它的底边中心为基准,「拖离手牌区 = 释放」也以它为准。
 ///       把 HandArea1 的 rect 调大 = 更容易被算作「还在手牌区内」(取消更宽容、更不容易误出牌);调小则稍微拖出去一点就当作打出。
 ///     · fanLayout:间距 / 弧度 / 基准高度都在 FanLayout 那份实例上调,这里只负责接线;我方那份的现值见 FanLayout 的说明。
@@ -38,6 +43,9 @@ public class HandUI : MonoBehaviour
     [Header("引用")]
     [Tooltip("必须是 Project 窗口里的 Card.prefab 资产,不要拖场景里的实例")]
     [SerializeField] private CardDisplay cardPrefab;
+    [Tooltip("战场卡面:CardsInBattle.prefab。留空则由 BattlefieldManager 自己按路径认领;\n" +
+             "它只影响战场上的卡,手牌与悬停预览永远用 cardPrefab")]
+    [SerializeField] private CardDisplay battleCardPrefab;
     [Tooltip("手牌区:HandArea1")]
     [SerializeField] private Transform handRoot;
     [Tooltip("HandArea1 上的 FanLayout")]
@@ -50,8 +58,11 @@ public class HandUI : MonoBehaviour
     private readonly List<CardDisplay> spawned = new();
     public IReadOnlyList<CardDisplay> Spawned => spawned;
 
-    /// <summary>手牌用的 Card.prefab(部署到战场时也用它生成小卡)</summary>
+    /// <summary>手牌用的 Card.prefab(手牌 + 悬停预览都用它)</summary>
     public CardDisplay CardPrefab => cardPrefab;
+
+    /// <summary>战场卡面 CardsInBattle.prefab(只给 BattlefieldManager 生战场卡用;留空则它自己按路径认领)</summary>
+    public CardDisplay BattleCardPrefab => battleCardPrefab;
 
     /// <summary>手牌区矩形 —— 拖动出牌时"拖离这个范围才算释放"(策划案§7.2.1)</summary>
     public RectTransform HandRect => handRoot as RectTransform;
@@ -93,14 +104,23 @@ public class HandUI : MonoBehaviour
         }
 
         // 拖成场景里的实例时,那个实例上被 Inspector 覆盖过的字段会被原样复制到
-        // 每一张抽出来的卡上。典型事故:实例的 borderImage 被改成了 Background,
+        // 每一张抽出来的卡上。典型事故:实例的 rarityImage 被改成了 Background,
         // 于是每抽一张卡就把整块游戏背景染成稀有度颜色。
         if (cardPrefab.gameObject.scene.IsValid())
         {
             Debug.LogError(
                 $"[HandUI] cardPrefab 引用的是场景里的实例「{cardPrefab.name}」,不是 Card.prefab 资产。" +
                 "请从 Project 窗口把 Prefabs/UI/Card.prefab 拖进来 —— " +
-                "否则该实例上被覆盖过的字段(尤其是 borderImage)会污染每一张抽出来的卡。",
+                "否则该实例上被覆盖过的字段(尤其是 rarityImage)会污染每一张抽出来的卡。",
+                this);
+        }
+
+        // 战场卡面同理:留空不算错(BattlefieldManager 会按路径认领),拖成场景实例就要提醒
+        if (battleCardPrefab != null && battleCardPrefab.gameObject.scene.IsValid())
+        {
+            Debug.LogError(
+                $"[HandUI] battleCardPrefab 引用的是场景里的实例「{battleCardPrefab.name}」,不是 CardsInBattle.prefab 资产。" +
+                "请从 Project 窗口把 Prefabs/UI/CardsInBattle.prefab 拖进来。",
                 this);
         }
 

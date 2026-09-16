@@ -167,6 +167,11 @@ public class FieldUnit : MonoBehaviour
         ApMax = data != null ? BattleRules.ActionPointsOf(data) : 1;
         DeployedThisTurn = true;
 
+        // 悬停预览要知道"这张牌现在在场上是谁":预览显示的是当前攻/血,不是卡面数值
+        // (战场卡的悬停组件就挂在卡面根上,由 BattlefieldManager 决定开不开)
+        var hover = cardView != null ? cardView.GetComponent<CardHover>() : null;
+        if (hover != null) hover.Bind(this);
+
         Flush();
     }
 
