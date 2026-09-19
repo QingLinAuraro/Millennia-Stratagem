@@ -2,9 +2,12 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+// 牌堆、洗牌、抽牌
 public class Deck
 {
+    // 随机洗牌
     private readonly List<CardData> cards = new();
+    // 获取牌堆中剩余牌数量
     public int Count => cards.Count;
 
     public void Init(IEnumerable<CardData> list)
@@ -14,6 +17,7 @@ public class Deck
         Shuffle();
     }
 
+    // 洗牌
     public void Shuffle()
     {
         for (int i = cards.Count - 1; i > 0; i--)
@@ -23,10 +27,7 @@ public class Deck
         }
     }
 
-    /// <summary>
-    /// 往牌堆里加一张(「召唤(牌堆)」效果用,策划案§4.3)。
-    /// 放回**牌堆顶**(下一张就摸到),这是"召唤"类卡的本意:立刻补一张资源。
-    /// </summary>
+    // 将卡牌加入到牌堆
     public void Add(CardData card, bool toTop = true)
     {
         if (card == null) return;
@@ -35,6 +36,7 @@ public class Deck
         else cards.Add(card);
     }
 
+    // 抽取卡牌
     public CardData Draw()
     {
         if (cards.Count == 0) return null;
