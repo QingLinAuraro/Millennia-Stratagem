@@ -12,11 +12,12 @@
 约定：
   · 插图(artwork)一律留空 —— 后续在 Inspector 里补（用户本轮明确「插图暂时不用管」）。
   · 枚举值取 CardData.cs 中的声明顺序下标，改枚举顺序必须同步改这里的 *_VALUE 映射。
+    **例外：keywords 写的是枚举名而不是下标**（见 KEYWORD_VALUE 上方注释），枚举增删成员不会读错。
   · 策略牌：unitType = Strategy(4)（与 CardDisplay.cs 的 isUnit 判定一致），
     atk/hp/actionCost/actionCount 全部写 0，weight 写 0（策划案「策略卡忽略」）。
   · 重甲1/2/3 在 enum Keyword 里只有单一 HeavyArmor 档位，层级信息无处承载 —— 见运行末尾的「已知缺口」。
-  · keywords 程序名以表内「keywords(程序)」列为准，唯一补齐项是 han_024 的「召唤(牌堆)」→ Summon
-    （build_dynasty_sheets.py 的 ENUM_MAP 漏登记 召唤，而 Keyword.Summon 在枚举中存在）。
+  · 「摸牌 / 召唤 / 回血 / 誓师」不是词条，是卡牌效果（登记在 CardEffectDatabase + effectText），
+    数据表里即使写了也会被 KEYWORD_DEPRECATED 跳过，不写进 .asset。
   · targetType（策略卡要指定什么目标，策划案§7.2.2）：表里没有这一列，靠 TACTIC_TARGET_BY_CARD
     按 cardId 维护；漏登记的策略卡会直接报错中止，逼着补上。
 """
@@ -41,21 +42,28 @@ UNITTYPE_VALUE = {"步兵": 0, "骑兵": 1, "弓兵": 2, "支援": 3}        # I
 UNITTYPE_STRATEGY = 4                                               # UnitType.Strategy（策略牌）
 WEIGHT_VALUE = {"轻": 0, "中": 1, "重": 2}                           # Light/Medium/Heavy
 
-# CardData.cs: enum Keyword { Blitz, Ambush, Guard, BloodBattle, DoubleStrike,
-#                            HeavyArmor, DrawCards, Summon, Heal, Oath }
+# CardData.cs: enum Keyword { Blitz, Ambush, Guard, BloodBattle, DoubleStrike, HeavyArmor, Resist }
+# 只放「固定数值 / 固定内容」的词条。摸牌/召唤/回血/誓师是**卡牌效果**，登记在 CardEffectDatabase
+# 并写在 CardData.effectText 里，不是词条 —— 不要再加回本表。
+#
+# ⚠ 写进 .asset 的是**枚举名**(keywords: - Blitz)，不是下标。
+#   早先这里写的是下标(闪击→0)，一旦 CardData.cs 的 Keyword 增删成员，
+#   老 .asset 里的数字就会静默错位(han_024 的「召唤」下标 7 越界，卡面词条显示成 "7")。
+#   写成名字之后，枚举怎么改都不会读错，最多是这条词条被 Unity 丢弃并报警告。
 KEYWORD_VALUE = {
     "闪击": 0, "伏兵": 1, "守护": 2, "血战": 3, "连战": 4,
-    "重甲1": 5, "重甲2": 5, "重甲3": 5,          # enum 只有单一 HeavyArmor 档位
-    "摸牌": 6, "召唤(牌堆)": 7, "召唤(手牌)": 7, "召唤": 7, "回血": 8, "誓师": 9,
+    "重甲1": 5, "重甲2": 5, "重甲3": 5,          # enum 只有单一 HeavyArmor 档位，层数靠重复登记
+    "抵抗": 6,
 }
 KEYWORD_NAME = dict([
     (0, "Blitz"), (1, "Ambush"), (2, "Guard"), (3, "BloodBattle"), (4, "DoubleStrike"),
-    (5, "HeavyArmor"), (6, "DrawCards"), (7, "Summon"), (8, "Heal"), (9, "Oath"),
+    (5, "HeavyArmor"), (6, "Resist"),
 ])
 
-# 表内「keywords(程序)」列已知漏登记项：中文词条 → 应写进 .asset 的程序枚举名
-PROGRAM_KEYWORD_OVERRIDE = {
-    "召唤(牌堆)": "Summon",   # build_dynasty_sheets.py 的 ENUM_MAP 未登记 召唤，Keyword.Summon 实际存在
+# 数据表里出现过的「已废弃词条」：这些是卡牌效果,不是词条,登记表/效果文案里已经有了。
+# 列在这里是为了让脚本**明确跳过并报告**，而不是当成未知词条报错刷屏。
+KEYWORD_DEPRECATED = {
+    "摸牌", "召唤(牌堆)", "召唤(手牌)", "召唤", "回血", "誓师",
 }
 
 DYNASTY_DIR = {"秦": "Qin", "汉": "Han"}
@@ -113,9 +121,11 @@ def make_guid(key):
 
 
 def build_asset_yaml(asset_name, card):
+    # 词条写成枚举**名**(keywords: - Blitz)。Unity 按名字反查枚举值,
+    # 所以 CardData.cs 里 Keyword 增删成员都不会让老 .asset 静默错位(详见 KEYWORD_VALUE 上方注释)。
     kw_lines = "  keywords: []\n"
     if card["keywords"]:
-        kw_lines = "  keywords:\n" + "".join(f"  - {k}\n" for k in card["keywords"])
+        kw_lines = "  keywords:\n" + "".join(f"  - {yaml_scalar(k)}\n" for k in card["keywords"])
 
     return (
         "%YAML 1.1\n"
@@ -181,27 +191,30 @@ def cell(ws, r, c):
 
 
 def parse_keywords(raw_cn, raw_prog, card_id, problems):
-    """中文词条列 → 程序枚举下标列表；同时校验表内「keywords(程序)」列是否一致。"""
+    """中文词条列 → 程序枚举**名**列表；同时校验表内「keywords(程序)」列是否一致。"""
     cn_list = [k.strip() for k in re.split(r"[,，]", raw_cn) if k.strip()]
     prog_list = [k.strip() for k in re.split(r"[,，]", raw_prog) if k.strip()]
 
     out = []
     for k in cn_list:
+        if k in KEYWORD_DEPRECATED:
+            # 效果类写法(摸牌/召唤/回血/誓师)已不是词条，静默跳过 —— 它们由效果栏承载
+            continue
         if k not in KEYWORD_VALUE:
             problems.append(f"{card_id}: 词条「{k}」不在 CardData.cs 的 Keyword 枚举内")
             continue
-        v = KEYWORD_VALUE[k]
+        v = KEYWORD_NAME[KEYWORD_VALUE[k]]
         if v not in out:
             out.append(v)
 
-    # 与表内程序列对账
-    expect = [PROGRAM_KEYWORD_OVERRIDE.get(k, KEYWORD_NAME[KEYWORD_VALUE[k]])
-              for k in cn_list if k in KEYWORD_VALUE]
+    # 与表内程序列对账(同样先剔掉已废弃的效果类写法)
+    expect = [KEYWORD_NAME[KEYWORD_VALUE[k]]
+              for k in cn_list if k in KEYWORD_VALUE and k not in KEYWORD_DEPRECATED]
     expect = list(dict.fromkeys(expect))
-    if expect != prog_list:
-        note = "（已按 Keyword 枚举补齐）" if set(expect) - set(prog_list) else ""
-        problems.append(f"{card_id}: keywords(程序) 列写的是 {prog_list or '空'}，"
-                        f"按中文词条 {cn_list} 应为 {expect}{note}")
+    prog_kept = [p for p in prog_list if p not in KEYWORD_DEPRECATED]
+    if expect != prog_kept:
+        problems.append(f"{card_id}: keywords(程序) 列写的是 {prog_kept or '空'}，"
+                        f"按中文词条 {cn_list} 应为 {expect}")
     return out
 
 

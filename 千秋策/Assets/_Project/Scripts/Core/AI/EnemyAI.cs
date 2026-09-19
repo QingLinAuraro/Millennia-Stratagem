@@ -1141,9 +1141,24 @@ public class EnemyAI : MonoBehaviour
         Debug.Log(sb.ToString());
     }
 
+    /// <summary>
+    /// 这张牌会不会过牌。「摸牌」已经不作为卡面词条存在了(词条只放固定数值/内容的能力),
+    /// 所以判据从 Keyword.DrawCards 改成:先看登记表里有没有抽牌效果,再退回效果文案。
+    /// </summary>
     private static bool IsDrawCard(CardData card)
-        => BattleRules.HasKeyword(card, Keyword.DrawCards)
-           || (card != null && card.effectText != null && (card.effectText.Contains("抽取") || card.effectText.Contains("摸牌")));
+    {
+        if (card == null) return false;
+
+        var set = CardEffectDatabase.Get(card);
+        if (set != null && !set.IsEmpty)
+        {
+            for (int i = 0; i < set.effects.Count; i++)
+                if (set.effects[i] != null && set.effects[i].kind == CardEffectKind.DrawCards) return true;
+        }
+
+        return card.effectText != null
+               && (card.effectText.Contains("抽取") || card.effectText.Contains("摸牌"));
+    }
 
     private static bool DeckIsEmpty(BattleSide side)
     {

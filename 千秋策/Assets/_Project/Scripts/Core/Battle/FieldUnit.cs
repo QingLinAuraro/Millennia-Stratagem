@@ -246,9 +246,15 @@ public class FieldUnit : MonoBehaviour
     }
 
     /// <summary>
-    /// 加一条临时增益(策划案§4.3 buff 类;卡面写「本回合」= 1 轮)。
-    /// 同时给 ATK 与 HP 上限加值并回满这部分 HP —— 和「ATK+2、HP+3」的读法一致:
-    /// 那 3 点 HP 是加上限,不是治疗。
+    /// 加一条增益(策划案§4.3 buff 类)。同时给 ATK 与 HP 上限加值并回满这部分 HP ——
+    /// 和「ATK+2、HP+3」的读法一致:那 3 点 HP 是加上限,不是治疗。
+    ///
+    /// rounds 的口径:
+    ///   · 0 或负数(默认) = **持续无限回合**:一次性增幅,加了就一直留着,只有单位退场才没。
+    ///     不这么写的话 Mathf.Max(1, rounds) 会把它夹成 1 轮,卡面没写「本回合」的增益会莫名掉。
+    ///   · 1 = 扛到下一次轮到自己开始时失效(卡面写「本回合」的)。
+    ///   · N = 扛 N 轮。
+    /// 内部用 int.MaxValue 当「永不过期」的哨兵值,ExpireTempBuffIfDue 那边靠它直接跳过。
     /// </summary>
     public void AddTempBuff(int atk, int hp, int rounds, int currentRound)
     {
@@ -264,17 +270,21 @@ public class FieldUnit : MonoBehaviour
             if (hp > 0) ApplyHpDelta(hp);
         }
 
-        tempBuffExpireRound = Mathf.Max(tempBuffExpireRound, currentRound + Mathf.Max(1, rounds));
+        // 永久增益:直接顶到「永不过期」;已经永久的也不会被后来的有限增益缩回来
+        int expireRound = rounds <= 0 ? int.MaxValue : currentRound + rounds;
+        tempBuffExpireRound = Mathf.Max(tempBuffExpireRound, expireRound);
         Flush();
     }
 
     /// <summary>
-    /// 检查临时增益是否过期(每次进入新回合时由 BattleSettlement 调)。
+    /// 检查增益是否过期(每次进入新回合时由 BattleSettlement 调)。
     /// 到点就从当前值上扣回加过的那部分,恢复卡面基础数值。
+    /// 永久增益(AddTempBuff 收到 rounds ≤ 0)存的是 int.MaxValue,这里直接跳过,永远不失效。
     /// </summary>
     public bool ExpireTempBuffIfDue(int currentRound)
     {
-        if (tempBuffExpireRound <= 0 || currentRound < tempBuffExpireRound) return false;
+        if (tempBuffExpireRound <= 0 || tempBuffExpireRound == int.MaxValue) return false;
+        if (currentRound < tempBuffExpireRound) return false;
 
         if (tempAtk != 0) ApplyAtkDelta(-tempAtk);
         if (tempHp != 0)

@@ -201,26 +201,12 @@ public static class CardEffectResolver
                     anyViable = true;      // 牌堆空了也是抽牌 → 走疲劳,照样算"打得出去"
                     break;
 
-                case CardEffectKind.HealBuilding:
-                    if (HasRepairableBuilding(caster)) anyViable = true;
-                    else if (isPrimaryEffect && primaryUnit != null && primaryUnit.IsBuilding && primaryUnit.Side == caster.side)
-                        primaryOk = needsPrimary = true;
-                    break;
-
-                case CardEffectKind.HealUnit:
-                    if (effect.scope == CardEffectScope.Auto || effect.scope != CardEffectScope.Target)
-                    {
-                        if (HasHealableUnit(caster)) anyViable = true;
-                    }
-                    else
-                    {
-                        needsPrimary = true;
-                        if (primaryUnit != null && primaryUnit.Side == caster.side) primaryOk = true;
-                    }
-                    break;
-
-                case CardEffectKind.HealCamp:
-                    if (BattleSettlement.FindCamp(caster.side) != null) anyViable = true;
+                case CardEffectKind.Heal:
+                    // 回血只有一种 kind,目标是谁由玩家指定 / scope 决定,所以这里只判「场上有没有能回的东西」。
+                    // 具体回建筑还是回兵牌在 ApplyHeal 里按目标类型分流。
+                    if (HasRepairableBuilding(caster) || HasHealableUnit(caster)
+                        || BattleSettlement.FindCamp(caster.side) != null)
+                        anyViable = true;
                     break;
 
                 case CardEffectKind.DiscardHand:
@@ -290,9 +276,7 @@ public static class CardEffectResolver
             case CardEffectKind.Damage:       return ApplyDamage(effect, caster, primaryUnit, primaryRow);
             case CardEffectKind.Buff:         return ApplyBuff(effect, caster, primaryUnit);
             case CardEffectKind.DrawCards:    return ApplyDraw(effect, caster);
-            case CardEffectKind.HealBuilding: return ApplyRepair(effect, caster, primaryUnit);
-            case CardEffectKind.HealUnit:     return ApplyHealUnit(effect, caster, primaryUnit);
-            case CardEffectKind.HealCamp:     return ApplyHealCamp(effect, caster);
+            case CardEffectKind.Heal:         return ApplyHeal(effect, caster, primaryUnit);
             case CardEffectKind.DiscardHand:  return ApplyDiscard(effect, caster);
             case CardEffectKind.Restrict:     return ApplySuppress(effect, caster, primaryUnit);
             case CardEffectKind.Summon:       return ApplySummon(effect, caster);
@@ -386,7 +370,11 @@ public static class CardEffectResolver
             ? $"ATK+{effect.atkValue}、HP+{effect.hpValue}"
             : effect.atkValue != 0 ? $"ATK+{effect.atkValue}" : $"HP+{effect.hpValue}";
 
-        return $"「{target.DisplayName}」本回合 {stats}";
+        // durationRounds ≤ 0 = 持续无限回合(一次性永久增幅),别再说成「本回合」
+        string span = effect.durationRounds <= 0 ? "" : "本回合 ";
+        return caster.side == BattleSide.Player
+            ? $"「{target.DisplayName}」{span}{stats}"
+            : $"对方「{target.DisplayName}」{span}{stats}";
     }
 
     // ---------------------------------------------------------------- 抽牌 / 召唤 / 弃牌
@@ -444,60 +432,70 @@ public static class CardEffectResolver
 
     // ---------------------------------------------------------------- 回血 / 维修
 
-    private static string ApplyRepair(CardEffect effect, Caster caster, FieldUnit primaryUnit)
+    /// <summary>
+    /// 回血只有这一条:回建筑(维修,§7.3)/ 回兵牌 / 回大营的区别**落在目标是谁上**,不靠 kind 分家。
+    ///
+    /// 目标的决定顺序:
+    ///   1. 玩家指定的那个目标(primaryUnit),只要它确实是友方、且还活着 —— 拖到己方建筑上就是修建筑,拖到兵牌上就是回兵牌;
+    ///   2. scope == Caster(「为一座己方建筑回复 7 点 HP」这种无目标写法)/ 第 1 个目标不可用时:
+    ///      按目标类型自动挑 —— 建筑优先挑最该修的(PickRepairableBuilding),兵牌挑最该回的(PickAutoTarget);
+    ///   3. 都没有就退到大营。
+    /// 「被摧毁的建筑」只有维修卡修得回来(对齐卡面血量 + 1 回合无敌,§7.3)。
+    /// </summary>
+    private static string ApplyHeal(CardEffect effect, Caster caster, FieldUnit primaryUnit)
     {
-        FieldUnit building = primaryUnit;
-        if (building == null || !building.IsBuilding || building.Side != caster.side)
-            building = PickRepairableBuilding(caster);
+        FieldUnit target = primaryUnit;
 
-        if (building == null) return null;
+        // 玩家指定的目标:必须是友方、还活着。建筑被摧毁时 IsAlive 为假,所以这里额外放行"友方建筑"
+        bool primaryUsable = target != null && target.Side == caster.side
+                             && (target.IsAlive || (target.IsBuilding && !target.IsCamp));
+
+        if (!primaryUsable)
+        {
+            // 自动挑:先建筑(维修优先,含被摧毁的),再兵牌,最后大营
+            target = PickRepairableBuilding(caster);
+            if (target == null) target = PickAutoTarget(caster, ally: true);
+            if (target == null) target = BattleSettlement.FindCamp(caster.side);
+        }
+
+        if (target == null) return null;
 
         // §7.3 维修卡:除了回血,还给建筑 1 回合无敌,防止同一回合反复用低费修缮卡刷建筑。
         // 判据 = 「这张牌的第一目标本来就是己方建筑」—— 兵牌效果里没有修自己建筑的写法。
         bool isRepairCard = primaryUnit != null && primaryUnit.IsBuilding && primaryUnit.Side == caster.side;
 
-        // 已经被摧毁的建筑:维修卡把它「修回来」并对齐到卡面血量,顺带给无敌
-        if (!building.IsAlive)
+        if (target.IsBuilding)
         {
-            int restore = Mathf.Max(effect.amount, building.MaxHp);
-            building.ClearWrecked();
-            building.SetHp(restore);
-            building.GrantInvincible(1);
-            building.ShowNumber(restore, healing: true, 0, building.Hp);
-            return $"修复了被摧毁的「{building.BuildingName}」（{restore} HP，1 回合无敌）";
+            // 已经被摧毁的建筑:维修卡把它「修回来」并对齐到卡面血量,顺带给无敌
+            if (!target.IsAlive)
+            {
+                int restore = Mathf.Max(effect.amount, target.MaxHp);
+                target.ClearWrecked();
+                target.SetHp(restore);
+                target.GrantInvincible(1);
+                target.ShowNumber(restore, healing: true, 0, target.Hp);
+                return $"修复了被摧毁的「{target.BuildingName}」（{restore} HP，1 回合无敌）";
+            }
+
+            int repaired = BattleSettlement.Heal(target, effect.amount);
+            if (isRepairCard) target.GrantInvincible(1);
+
+            if (repaired <= 0 && !isRepairCard) return null;
+            return repaired > 0
+                ? $"为「{target.BuildingName}」回复 {repaired} 点 HP{(isRepairCard ? "，并获得 1 回合无敌" : "")}"
+                : $"「{target.BuildingName}」已满血，获得 1 回合无敌";
         }
 
-        int healed = BattleSettlement.Heal(building, effect.amount);
-        if (isRepairCard) building.GrantInvincible(1);
-
-        if (healed <= 0 && !isRepairCard) return null;
-        return healed > 0
-            ? $"为「{building.BuildingName}」回复 {healed} 点 HP{(isRepairCard ? "，并获得 1 回合无敌" : "")}"
-            : $"「{building.BuildingName}」已满血，获得 1 回合无敌";
-    }
-
-    private static string ApplyHealUnit(CardEffect effect, Caster caster, FieldUnit primaryUnit)
-    {
-        var target = primaryUnit;
-        if (target == null || target.Side != caster.side || !target.IsUnit) target = PickAutoTarget(caster, ally: true);
-        if (target == null) return null;
-
+        // 兵牌 / 大营:直接回血
         int healed = BattleSettlement.Heal(target, effect.amount);
         if (healed <= 0) return null;
 
         // 回血还被「守护」挡着吗?不 —— 治疗是友方效果,守护只挡选中敌方目标(§4.3)
+        if (target.IsCamp) return $"大营回复 {healed} 点 HP";
+
         return caster.side == BattleSide.Player
             ? $"「{target.DisplayName}」回复 {healed} 点 HP"
             : $"对方为「{target.DisplayName}」回复 {healed} 点 HP";
-    }
-
-    private static string ApplyHealCamp(CardEffect effect, Caster caster)
-    {
-        var camp = BattleSettlement.FindCamp(caster.side);
-        if (camp == null) return null;
-
-        int healed = BattleSettlement.Heal(camp, effect.amount);
-        return healed > 0 ? $"大营回复 {healed} 点 HP" : null;
     }
 
     // ================================================================ 兵牌部署时(支援卡增益 / 召唤)

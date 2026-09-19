@@ -27,6 +27,5 @@ MonoBehaviour:
   hp: 6
   unitType: 2
   weight: 2
-  keywords:
-  - 7
+  keywords: []
   targetType: 0

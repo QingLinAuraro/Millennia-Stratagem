@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using UnityEngine;
 
 /// <summary>
-/// 全卡池的效果登记表(策划案§7.2.1 第 3 步「效果结算」的数据来源)。
+/// 全卡池的效果登记表
 ///
 /// 为什么要单独一张表,而不是新的 ScriptableObject 字段:
 ///   · 卡牌 .asset 是 Tools/build_card_assets.py 从《数据表demo.xlsx》生成的,字段与 CardData.cs 一一对应;
@@ -112,9 +112,10 @@ public static class CardEffectDatabase
             .Add(CardEffect.Damage(3, CardEffectScope.Random));
 
         // 商君变法:抽取1张牌；为一座己方建筑回复7点HP
+        // 「为一座己方建筑」= 无指定目标,由结算器自动挑最该修的那座(scope: Auto)
         t["qin_020"] = new CardEffectSet { displayText = "抽取 1 张牌；为一座己方建筑回复 7 点 HP" }
             .Add(CardEffect.Draw(1))
-            .Add(CardEffect.Repair(7));
+            .Add(CardEffect.Heal(7, CardEffectScope.Auto));
 
         // 移民实边:抽取3张牌
         t["qin_021"] = new CardEffectSet { displayText = "抽取 3 张牌" }
@@ -122,12 +123,13 @@ public static class CardEffectDatabase
 
         // ---------------------------------------------------------- 汉·兵牌
         // 治粟都尉:部署当回合,指定一个友方单位本回合 HP+3
+        // 卡面写「本回合」→ durationRounds 显式填 1;不填就是永久增幅
         t["han_005"] = new CardEffectSet { displayText = "部署当回合，指定一个友方单位本回合 HP+3" }
-            .Add(CardEffect.Buff(0, 3, CardEffectScope.Target, CardEffectTargetSlot.Primary));
+            .Add(CardEffect.Buff(0, 3, CardEffectScope.Target, CardEffectTargetSlot.Primary, rounds: 1));
 
         // 汉家大黄弩:召唤(牌堆)—— §4.3「添加一张卡牌进入牌堆」,这里加一张自己进牌堆
         t["han_024"] = new CardEffectSet { displayText = "召唤（牌堆）：将一张「汉家大黄弩」加入己方牌堆" }
-            .Add(new CardEffect { kind = CardEffectKind.Summon, summonCardId = "han_024", summonCount = 1 });
+            .Add(CardEffect.Summon("han_024", 1));
 
         // ---------------------------------------------------------- 汉·策略牌
         // 招降:对敌方随机单位造成3点伤害
@@ -136,12 +138,12 @@ public static class CardEffectDatabase
 
         // 屯田:为一座己方建筑回复5点HP；抽取1张牌
         t["han_008"] = new CardEffectSet { displayText = "为一座己方建筑回复 5 点 HP；抽取 1 张牌" }
-            .Add(CardEffect.Repair(5))
+            .Add(CardEffect.Heal(5, CardEffectScope.Auto))
             .Add(CardEffect.Draw(1));
 
         // 破敌封赏:指定一个友方单位本回合ATK+2、HP+3；抽取1张牌
         t["han_015"] = new CardEffectSet { displayText = "指定一个友方单位本回合 ATK+2、HP+3；抽取 1 张牌" }
-            .Add(CardEffect.Buff(2, 3))
+            .Add(CardEffect.Buff(2, 3, CardEffectScope.Target, CardEffectTargetSlot.Primary, rounds: 1))
             .Add(CardEffect.Draw(1));
 
         // 离间:抽取1张牌；对敌方随机单位造成3点伤害
@@ -152,22 +154,22 @@ public static class CardEffectDatabase
         // 决水灌城:指定一个友方单位本回合HP+2；对指定一排单位造成2点伤害
         // 第二个目标(打哪一排)CardData 里没字段放,由结算器自动挑「敌方单位最多的那一排」。
         t["han_018"] = new CardEffectSet { displayText = "指定一个友方单位本回合 HP+2；对敌方一排单位造成 2 点伤害" }
-            .Add(CardEffect.Buff(0, 2))
+            .Add(CardEffect.Buff(0, 2, CardEffectScope.Target, CardEffectTargetSlot.Primary, rounds: 1))
             .Add(CardEffect.Damage(2, CardEffectScope.Row, CardEffectTargetSlot.Secondary));
 
         // 盐铁论:限制敌方一个单位一回合行动；为一座己方建筑回复5点HP；为一个友方单位回复3点HP
-        // 第二个目标(修哪座建筑)与第三个目标(给谁回血)同样由结算器自动挑。
+        // 第 2/3 个目标同样由结算器按目标类型自动挑(建筑 → 兵牌 → 大营,见 CardEffectResolver.ApplyHeal)。
         t["han_021"] = new CardEffectSet { displayText = "限制敌方一个单位一回合行动；为一座己方建筑回复 5 点 HP；为一个友方单位回复 3 点 HP" }
             .Add(CardEffect.Suppress(1))
-            .Add(CardEffect.AutoRepair(5))
-            .Add(CardEffect.AutoHealUnit(3));
+            .Add(CardEffect.Heal(5, CardEffectScope.Auto, CardEffectTargetSlot.Secondary))
+            .Add(CardEffect.Heal(3, CardEffectScope.Auto, CardEffectTargetSlot.Tertiary));
     }
 
     // ================================================================ 文案兜底解析
 
     /// <summary>
     /// 按效果文案猜结构。只在登记表漏了这张策略卡时走 —— 目的是「不至于白付 CP」,不追求精确。
-    /// 认得出的写法:「对…造成N点伤害」「随机单位」「抽取N张牌」「摸N张牌」「回复N点HP」「弃置…手牌」「限制…N回合」。
+    /// 认得出的写法:「对…造成N点伤害」「随机单位」「抽取N张牌」「摸N张牌」「回复 N 点 HP」「弃置…手牌」「限制…N回合」。
     /// </summary>
     private static CardEffectSet ParseFromText(CardData card)
     {
@@ -191,25 +193,29 @@ public static class CardEffectDatabase
         }
 
         // 回血:为…（建筑）回复N点HP / 为一个友方单位回复N点HP
-        var heal = Regex.Match(text, @"回复(\d+)点HP");
+        // 回血只有一种 kind,靠 scope 区分目标:「一座己方建筑」这类没指定目标的写法 → Auto,由结算器自动挑。
+        var heal = Regex.Match(text, @"回复\s*(\d+)\s*点HP");
         if (heal.Success)
         {
             int amount = int.Parse(heal.Groups[1].Value);
             // 「回复」前面那一小段决定加在谁身上
             int idx = text.IndexOf("回复", System.StringComparison.Ordinal);
             string before = idx > 0 ? text.Substring(0, idx) : text;
-            if (before.Contains("建筑")) set.Add(CardEffect.Repair(amount));
-            else set.Add(CardEffect.HealUnitFor(amount));
+            bool noTarget = before.Contains("一座") || before.Contains("随机");
+            set.Add(CardEffect.Heal(amount, noTarget ? CardEffectScope.Auto : CardEffectScope.Target));
         }
 
-        // buff:ATK+N、HP+N(只认「本回合」那一套写法)
+        // buff:ATK+N、HP+N。卡面写「本回合」的只扛 1 轮,其余一律按持续无限回合算
         var atk = Regex.Match(text, @"ATK\+(\d+)");
         var hp = Regex.Match(text, @"HP\+(\d+)");
         if (atk.Success || hp.Success)
         {
             set.Add(CardEffect.Buff(
                 atk.Success ? int.Parse(atk.Groups[1].Value) : 0,
-                hp.Success ? int.Parse(hp.Groups[1].Value) : 0));
+                hp.Success ? int.Parse(hp.Groups[1].Value) : 0,
+                CardEffectScope.Target,
+                CardEffectTargetSlot.Primary,
+                text.Contains("本回合") ? 1 : 0));
         }
 
         // 弃置手牌

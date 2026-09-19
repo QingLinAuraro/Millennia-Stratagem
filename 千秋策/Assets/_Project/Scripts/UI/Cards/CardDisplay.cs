@@ -139,11 +139,11 @@ public class CardDisplay : MonoBehaviour
     // 稀有度小方框的颜色:白 → 蓝 → 紫 → 金 → 红(红是给后续稀有度留的档位)
     private static readonly Dictionary<Rarity, Color> RarityColors = new()
     {
-        { Rarity.Standard, new Color(0.92f, 0.92f, 0.92f) },   // 普通:白
-        { Rarity.Limited,  new Color(0.35f, 0.55f, 1.00f) },   // 稀有:蓝
-        { Rarity.Special,  new Color(0.65f, 0.35f, 1.00f) },   // 史诗:紫
-        { Rarity.Elite,    new Color(1.00f, 0.80f, 0.25f) },   // 传说:金
-        { Rarity.Future,   new Color(0.95f, 0.25f, 0.25f) },   // 后续稀有度:红
+        { Rarity.Ordinary, new Color(0.92f, 0.92f, 0.92f) },   // 普通:白
+        { Rarity.Rare,     new Color(0.35f, 0.55f, 1.00f) },   // 稀有:蓝
+        { Rarity.Epic,     new Color(0.65f, 0.35f, 1.00f) },   // 史诗:紫
+        { Rarity.Legend,   new Color(1.00f, 0.80f, 0.25f) },   // 传说:金
+        { Rarity.Hero,     new Color(0.95f, 0.25f, 0.25f) },   // 英雄:红
     };
 
     private static readonly Dictionary<UnitType, string> TypeNames = new()
@@ -152,7 +152,8 @@ public class CardDisplay : MonoBehaviour
         { UnitType.Cavalry,  "骑" },
         { UnitType.Archer,   "弓" },
         { UnitType.Support,  "器" },
-        { UnitType.Strategy, "策" }
+        { UnitType.Strategy, "策" },
+        { UnitType.Counter,  "反" }
     };
 
     public void Bind(CardData data, CardViewMode mode = CardViewMode.Hand)
@@ -441,20 +442,11 @@ public class CardDisplay : MonoBehaviour
 
     private bool statColorCached;
 
-    private static string KeywordToChinese(Keyword k) => k switch
-    {
-        Keyword.Blitz        => "闪击",
-        Keyword.Ambush       => "伏兵",
-        Keyword.Guard        => "守护",
-        Keyword.BloodBattle  => "血战",
-        Keyword.DoubleStrike => "连战",
-        Keyword.HeavyArmor   => "重甲",
-        Keyword.DrawCards    => "摸牌",
-        Keyword.Summon       => "召唤",
-        Keyword.Heal         => "回血",
-        Keyword.Oath         => "誓师",
-        _ => k.ToString(),
-    };
+    /// <summary>
+    /// 词条在卡面上显示成什么。统一走 [Description] 上写的中文(EnumExtensions.GetDescription),
+    /// 这样加词条时只改 CardData.cs 的 Keyword 枚举,不用回来补一张对照表。
+    /// </summary>
+    private static string KeywordToChinese(Keyword k) => k.GetDescription();
 
     [Header("编辑器测试")]
     [SerializeField] private CardData testData;

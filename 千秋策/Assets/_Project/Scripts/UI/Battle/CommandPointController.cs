@@ -34,9 +34,10 @@ using UnityEngine.UI;
 ///   常调:
 ///     · startingCpMax(默认 1):开局 CP 上限,同时决定开局当前 CP(第 1 回合不走增长,直接按这个数补满)。
 ///       调大 = 开局就能连出大牌、节奏前压;调 0 = 第 1 回合什么都打不出。
-///     · cpGrowthPerTurn(默认 1):进入我方回合时 CP 上限 +N 并补满(注意是回合**开始**时涨,不是点结束回合时涨)。
-///       调大 = 更快把资源推到 12,中期出牌飞快;调 0 = CP 永远停在 startingCpMax。
-///       自然增长到 PlayerState.CpGrowthCap(12) 就封顶,所以调 6 和调 12 只是更快到 12,不会突破 12。
+///     · cpGrowthPerTurn(默认 1):**每回合的增长值**(增量)。第 N 回合自然上限 = 起始值 + (N-1) × 它,
+///       封顶 PlayerState.CpGrowthCap(12)。默认 1、起始 1 时就是「第 N 回合 = N 点,第 12 回合及以后恒为 12」。
+///       注意是按**回合数重算**而不是每次累加,所以同一回合被调两次也不会多涨。
+///       调 0 = CP 永远停在起始值;调大只会更快摸到 12,不会突破 12(12 以上只能靠策略牌/卡牌效果加)。
 ///     · debugRaiseCpMaxOnKey / debugRaiseCpMaxKey(默认 = 键)/ debugRaiseCpMaxAmount(默认 1):调试用手动抬 CP 上限,验证 12 → 24 那条线。
 ///       验完、出包之前务必把 debugRaiseCpMaxOnKey 关掉,不然玩家按一下 = 就白拿 1 点上限(顶到硬顶 24)。
 ///     · drawOpeningHand / openingHandSize(默认 5)/ waitOneFrameBeforeOpeningDraw:开局手牌。
@@ -75,8 +76,8 @@ public class CommandPointController : MonoBehaviour
     [Header("CP 池(策划案§4.5)")]
     [Tooltip("开局 CP 上限:第 1 回合 = 1")]
     [SerializeField] private int startingCpMax = 1;
-    [Tooltip("进入我方回合时:CP 上限 +1 并补满(涨费发生在回合开始,不是结束回合时)。\n" +
-             "自然增长封顶在 PlayerState.CpGrowthCap(12),硬顶 CpMaxLimit(24)")]
+    [Tooltip("每回合的增长值(增量):第 N 回合自然上限 = 起始值 + (N-1) × 它(默认 1 → 第 12 回合及以后恒为 12)。\n" +
+             "按回合数重算,不是每次累加。自然增长封顶 PlayerState.CpGrowthCap(12),硬顶 CpMaxLimit(24)")]
     [SerializeField] private int cpGrowthPerTurn = 1;
 
     [Header("调试:费用上限")]
@@ -232,7 +233,7 @@ public class CommandPointController : MonoBehaviour
         else
         {
             bool wasCapped = localPlayer.IsGrowthCapped;
-            localPlayer.BeginTurn(cpGrowthPerTurn);
+            localPlayer.BeginTurn(turnNumber, cpGrowthPerTurn);
 
             if (!wasCapped && localPlayer.IsGrowthCapped)
                 Debug.Log($"[CP] 我方第 {turnNumber} 回合:CP 上限已到自然增长封顶 {PlayerState.CpGrowthCap}");
@@ -260,7 +261,7 @@ public class CommandPointController : MonoBehaviour
     {
         if (localPlayer == null || amount <= 0) return;
 
-        localPlayer.ReduceMax(amount);
+        localPlayer.ChangeBonus(-amount);
         RefreshHud();
         CpChanged?.Invoke(Cp, CpMax);
         Debug.Log($"[CP] 粮草被焚:我方 CP 上限 -{amount},现在是 {Cp}/{CpMax}");
@@ -287,7 +288,7 @@ public class CommandPointController : MonoBehaviour
     /// <summary>
     /// 抬 CP 上限 —— 后期"费用上限 +N"类卡牌的入口(策划案里还没出这类牌)。
     ///
-    /// 自然增长(每回合 +1)只涨到 PlayerState.CpGrowthCap(12) 就停,
+    /// 自然增长只到 PlayerState.CpGrowthCap(12) 就停,
     /// 12 以上的部分只能靠这个方法来加;而不管谁加,都越不过 PlayerState.CpMaxLimit(24)。
     /// 返回实际涨了多少(顶到 24 之后是 0)。
     /// </summary>
@@ -295,7 +296,10 @@ public class CommandPointController : MonoBehaviour
     {
         if (localPlayer == null) return 0;
 
-        int gained = localPlayer.IncreaseMax(amount);
+        int before = CpMax;
+        localPlayer.ChangeBonus(amount);
+        int gained = CpMax - before;
+
         RefreshHud();
         CpChanged?.Invoke(Cp, CpMax);
 

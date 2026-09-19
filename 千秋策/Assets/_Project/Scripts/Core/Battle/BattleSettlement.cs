@@ -262,7 +262,7 @@ public static class BattleSettlement
             // 双方对称,所以走同一段代码。
             var victim = owner == BattleSide.Player ? BattleSide.Enemy : BattleSide.Player;
 
-            GetPlayerState(victim)?.ReduceMax(2);
+            GetPlayerState(victim)?.ChangeBonus(-2);
             if (victim == BattleSide.Player) RefreshLocalHud();
             else EnemyDeckController.Instance?.NotifyCpChanged();
 

@@ -45,9 +45,9 @@ using UnityEngine;
 ///           (要自己调 BeginTurn()),只在手动驱动测试时才关。
 ///         · startingCpMax:开局 CP 上限,默认 1(策划案§4.5)。调大 = 敌方第 1 回合就能连出大牌,
 ///           用来快进到后期局面;调到 0 = 敌方第 1 回合一分钱都没有,什么也打不出。
-///         · cpGrowthPerTurn:每次进敌方回合的上限增长,默认 1(§2.4 补给阶段)。调大 = 敌方费用涨得快、
-///           压力陡增;调到 0 = 敌方费用永远停在开局值(只剩打策略牌的 +1 那条路)。
-///           注意它受 PlayerState.CpGrowthCap(12) 封顶,填 3 也不能突破 12。
+///         · cpGrowthPerTurn:每回合的增长值(增量),默认 1(§2.4 补给阶段)。第 N 回合自然上限 =
+///           起始值 + (N-1) × 它,封顶 PlayerState.CpGrowthCap(12)。调大 = 敌方费用更早到 12;
+///           调 0 = 永远停在初始上限(只剩打策略牌那条 +1 的路)。它是按回合数重算的,不是每次累加。
 ///         · openingHandSize:开局手牌张数,默认 5(§2.4)。调大 = 敌方开局选择更多,
 ///           但 Hand.MaxSize 是 7,超过的部分会被 TryAdd 判满直接退场,白扔;调到 0 或负数 = Start 直接 return,
 ///           开局一张不摸,只剩回合内抽牌。
@@ -100,7 +100,8 @@ public class EnemyDeckController : MonoBehaviour
     [Header("开局(策划案§2.4 / §4.5)")]
     [Tooltip("开局 CP 上限,第 1 回合双方都是 1")]
     [SerializeField] private int startingCpMax = 1;
-    [Tooltip("每个回合开始 CP 上限 +1(策划案§2.4 补给阶段)")]
+    [Tooltip("每回合的增长值(增量):第 N 回合自然上限 = 起始值 + (N-1) × 它(默认 1 → 第 12 回合及以后恒为 12)。\n" +
+             "按回合数重算,不是每次累加。自然增长封顶 PlayerState.CpGrowthCap(12),硬顶 CpMaxLimit(24)")]
     [SerializeField] private int cpGrowthPerTurn = 1;
     [Tooltip("开局手牌张数,策划案§2.4 = 双方各 5 张")]
     [SerializeField] private int openingHandSize = 5;
@@ -263,7 +264,7 @@ public class EnemyDeckController : MonoBehaviour
         }
         else
         {
-            enemy.BeginTurn(cpGrowthPerTurn);
+            enemy.BeginTurn(turnNumber, cpGrowthPerTurn);
             Debug.Log($"[EnemyDeck] 敌方第 {turnNumber} 回合:补给阶段 CP {Cp}/{CpMax}");
         }
 
@@ -289,7 +290,7 @@ public class EnemyDeckController : MonoBehaviour
     /// <summary>粮草被焚等效果:敌方 CP 上限下降(策划案§2.3)</summary>
     public void ReduceCpMax(int amount)
     {
-        enemy.ReduceMax(amount);
+        enemy.ChangeBonus(-amount);
         RefreshHud();
         CpChanged?.Invoke(Cp, CpMax);
         Debug.Log($"[EnemyDeck] 敌方 CP 上限 -{amount},现在是 {Cp}/{CpMax}");
@@ -301,7 +302,10 @@ public class EnemyDeckController : MonoBehaviour
     /// </summary>
     public int IncreaseCpMax(int amount)
     {
-        int gained = enemy.IncreaseMax(amount);
+        int before = CpMax;
+        enemy.ChangeBonus(amount);
+        int gained = CpMax - before;
+
         RefreshHud();
         CpChanged?.Invoke(Cp, CpMax);
 
