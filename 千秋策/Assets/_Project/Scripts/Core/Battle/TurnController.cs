@@ -12,51 +12,52 @@ using UnityEngine;
 /// 关键在于**部署费用是异步涨的**:每一方只在自己的回合开始时补给(+1 并补满),
 /// 不会再出现"对方结束回合、我方跟着涨"的同步推进。
 ///
-/// 费用的三个增长时机(全部写在这里,好找):
+/// 费用的增长时机(**只剩回合这一条路**):
 ///   1. 每个玩家的第 1 回合:CP 上限**直接初始化成 1**(不算增长);
-///   2. 之后每次进入自己的回合:上限 +cpGrowthPerTurn(自然增长,封顶 PlayerState.CpGrowthCap = 12);
-///   3. 打出一张**策略牌**之后:上限 +cpGrowthPerTactic(用牌换来的增长,只受硬顶 PlayerState.CpMaxLimit = 24 限制)。
+///   2. 之后每次进入自己的回合:上限 = 起始值 + (回合数-1) × cpGrowthPerTurn(封顶 PlayerState.CpGrowthCap = 12)。
 ///
 /// 各方自己接 TurnStarted 做事(补给 + 抽牌):CommandPointController = 我方,EnemyDeckController = 敌方。
-/// 敌方 AI 还没做,所以敌方回合可以配一个 enemyTurnSeconds 自动过(0 = 只能手动/按调试键结束)。
 ///
 /// 【挂载 & 调整】
 ///   挂在:Battle.unity 里挂在 BattleCanvas 上(Assets/_Project/Scenes/Battle.unity;同一个物体上还有
 ///         CommandPointController、EnemyDeckController、BattleHudButtons)。场景里没挂也能跑:Instance 会先全场景找,
 ///         找不到就新建一个空物体挂到 Canvas 下 —— 但那样得有人先用到 Instance 才会建,Start 里的 autoStart 照常生效。
 ///   引用:没有要手连的引用,全是自己填自己的:协作对象都走单例 —— CommandPointController.Instance(我方费用)、
-///         EnemyDeckController.Instance(敌方费用);事件在 OnEnable 订阅 CardPlayed、OnDisable 退订,不需要在 Inspector 里接。
-///         唯一要留意的后果:那两个单例没就绪时,「打出策略牌加费用上限」这一条会静默跳过(增长为 0 就什么都不打印),
-///         回合流转本身照常。
 ///   常调:
 ///     · firstSide:谁先手;改成 Enemy 就是敌方开局先走,想直接观察敌方回合从它下手最快。
 ///     · autoStart:开局要不要自动进第一个回合;关掉后必须有人自己调 StartFirstTurn(),否则回合永远不开始、
 ///       按调试键只会打印一句警告,出牌也会因为 HasStarted 为假而完全不拦。
-///     · cpGrowthPerTactic:打出一张策略牌后那一方的 CP 上限 +N(走硬顶 24,不受 12 的自然增长封顶限制);
-///       调大 = 策略牌打得越多费用越宽、后期爆发更强,填 0 = 关掉这条增长,费用只能靠每回合进回合时涨。
 ///     · enemyTurnSeconds:敌方回合等几秒自动结束 —— **这是没有 AI 时的兜底**。
 ///       默认 0(不自动结束):EnemyAI 接管回合时会自己调 EndTurn(),开着定时器会和 AI 抢着过回合。
 ///       想在没有 AI 的场景里调试,把它填 2 左右即可。
 ///     · debugEndTurnKey / debugEndTurnOnKey:调试结束回合的键和开关;发布前把 on 关掉即可,不用清空按键。
 ///       默认 T;别再用 N —— BattlefieldManager 的袭扰调试键(场景里设成了 N)会跟着一起触发。
 /// </summary>
+
+// 禁止在同一个 GameObject 上挂载多个 TurnController 组件
 [DisallowMultipleComponent]
+
+
 public class TurnController : MonoBehaviour
 {
     /// <summary>轮到谁</summary>
-    public enum Side { Local, Enemy }
+    public enum Side { Local, Enemy, Random }
 
     /// <summary>场景里没有就自己建,用到才建</summary>
     private static TurnController instance;
 
+    // 通过 TurnController.Instance 全局访问
     public static TurnController Instance
     {
         get
         {
+            // 如果静态引用存在，返回
+            // 静态引用不存在，搜索挂载TurnController的物体，找到则赋值返回
             if (instance != null) return instance;
             instance = FindObjectOfType<TurnController>();
             if (instance != null) return instance;
 
+            // 不存在上述物体时，创建新物体并挂载TurnController,如果场景中存在根 Canvas，将新物体设为它的子级
             var go = new GameObject("TurnController");
             var canvas = CanvasUtil.FindRootCanvas();
             if (canvas != null) go.transform.SetParent(canvas.transform, false);
@@ -66,19 +67,18 @@ public class TurnController : MonoBehaviour
     }
 
     [Header("先手")]
-    [Tooltip("谁先手:Local = 我方开局先走,Enemy = 敌方开局先走(调试敌方回合可以直接改这个)。只影响第一个回合,之后双方轮流")]
-    [SerializeField] private Side firstSide = Side.Local;
+    [Tooltip("谁先手:Local = 我方开局先走,Enemy = 敌方开局先走,Random = 双方随机先手。只影响第一个回合,之后双方轮流")]
+    [SerializeField] private Side firstSide = Side.Random;
+
+    // 自动开局
     [Tooltip("开局自动进入第一个回合。关掉的话要自己调 StartFirstTurn()")]
     [SerializeField] private bool autoStart = true;
 
-    [Header("费用增长(异步:只在进入自己回合 / 用策略牌时涨)")]
-    [Tooltip("打出一张策略牌之后,那一方的 CP 上限 +N。0 = 关掉。\n" +
-             "这是「用牌换来」的增长,走硬顶 CpMaxLimit(24),不受 12 的自然增长封顶限制")]
-    [SerializeField] private int cpGrowthPerTactic = 1;
-
+    // 敌方回合自动读秒
     [Header("敌方回合")]
     [Tooltip("没有 AI 时的兜底:进入敌方回合后等几秒自动结束。0 = 不自动结束(由 EnemyAI 自己结束回合)")]
-    [SerializeField] private float enemyTurnSeconds = 0f;
+    [SerializeField] private float enemyTurnSeconds = 30f;
+
 
     [Header("调试")]
     [Tooltip("结束当前回合(谁的回合都行),用来把双方轮流跑通")]
@@ -91,6 +91,8 @@ public class TurnController : MonoBehaviour
     private int localTurns;         // 我方走到第几个回合
     private int enemyTurns;         // 敌方走到第几个回合
     private bool started;
+
+    // 存放敌方自动结束的协程引用，便于取消停止
     private Coroutine autoEndRoutine;
 
     /// <summary>
@@ -108,20 +110,10 @@ public class TurnController : MonoBehaviour
     /// <summary>当前这一方自己的回合数</summary>
     public int CurrentSideTurnNumber => currentSide == Side.Local ? localTurns : enemyTurns;
 
+    // 当场景中存在该组件时，Awake 被调用，将自身设为单例
     private void Awake()
     {
         instance = this;
-    }
-
-    private void OnEnable()
-    {
-        // 用了策略牌 → 那一方 CP 上限增长(策划案:费用靠进回合和用策略牌两条腿涨)
-        EventManager.Subscribe<CardPlayedEventArgs>(GameEventType.CardPlayed, OnCardPlayed);
-    }
-
-    private void OnDisable()
-    {
-        EventManager.Unsubscribe<CardPlayedEventArgs>(GameEventType.CardPlayed, OnCardPlayed);
     }
 
     private void OnDestroy()
@@ -153,10 +145,15 @@ public class TurnController : MonoBehaviour
     public void StartFirstTurn()
     {
         if (started) return;
-
         started = true;
         roundNumber = 1;
-        StartSideTurn(firstSide);
+
+        Side actualFirst = firstSide;
+        if(firstSide == Side.Random)
+        {
+            actualFirst = UnityEngine.Random.Range(0,2) == 0 ? Side.Local : Side.Enemy;
+        }
+        StartSideTurn(actualFirst);
     }
 
     /// <summary>
@@ -201,7 +198,11 @@ public class TurnController : MonoBehaviour
             Debug.Log("[Turn] 对局已经结束,不再推进回合。");
             return;
         }
-
+        if (side == Side.Random)
+        {
+            Debug.LogError("[Turn] StartSideTurn 不能接收 Random，请先在 StartFirstTurn 解析先手胜方！");
+            return;
+        }
         currentSide = side;
         int sideTurn = side == Side.Local ? ++localTurns : ++enemyTurns;
 
@@ -260,29 +261,5 @@ public class TurnController : MonoBehaviour
     private void CleanupSide(BattleSide side)
     {
         BattleSettlement.EndTurnFor(side);
-    }
-
-    // ================================================================ 用策略牌 → 费用上限增长
-
-    private void OnCardPlayed(CardPlayedEventArgs e)
-    {
-        if (cpGrowthPerTactic <= 0) return;
-        if (e == null || e.Card == null || e.Player == null) return;
-        if (e.Card.cardType != CardType.Tactic) return;     // 只有策略牌涨费用,兵牌不涨
-
-        int gained;
-        if (e.Player.isLocal)
-        {
-            var cp = CommandPointController.Instance;
-            gained = cp != null ? cp.IncreaseCpMax(cpGrowthPerTactic) : 0;
-        }
-        else
-        {
-            var enemy = EnemyDeckController.Instance;
-            gained = enemy != null ? enemy.IncreaseCpMax(cpGrowthPerTactic) : 0;
-        }
-
-        if (gained > 0)
-            Debug.Log($"[Turn] {(e.Player.isLocal ? "我方" : "敌方")}打出策略牌「{e.Card.cardName}」:CP 上限 +{gained}");
     }
 }

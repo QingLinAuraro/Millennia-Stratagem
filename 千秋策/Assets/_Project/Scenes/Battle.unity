@@ -4576,7 +4576,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: da6b2d00e9a04396b73c9d03dc30fcaf, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  firstSide: 0
+  firstSide: 2
   autoStart: 1
   cpGrowthPerTactic: 1
   enemyTurnSeconds: 2

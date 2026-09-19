@@ -297,7 +297,8 @@ public class EnemyDeckController : MonoBehaviour
     }
 
     /// <summary>
-    /// 敌方 CP 上限 +N(敌方"费用上限"类卡牌的入口)。自然增长封顶在 PlayerState.CpGrowthCap(12),
+    /// 敌方 CP 上限 +N —— 「过费类」卡牌的入口,由 CardEffectResolver.ResolvePlayCostEffects
+    /// 在扣完卡费之后调用。自然增长封顶在 PlayerState.CpGrowthCap(12),
     /// 硬顶 PlayerState.CpMaxLimit(24)。返回实际涨了多少(顶到 24 之后是 0)。
     /// </summary>
     public int IncreaseCpMax(int amount)
@@ -310,6 +311,22 @@ public class EnemyDeckController : MonoBehaviour
         CpChanged?.Invoke(Cp, CpMax);
 
         if (gained > 0) Debug.Log($"[EnemyDeck] 敌方 CP 上限 +{gained},现在是 {Cp}/{CpMax}");
+        return gained;
+    }
+
+    /// <summary>
+    /// 敌方回费 —— 「回费类」卡牌的入口,同样在扣完卡费之后调用。
+    /// 只补当前费用,上限不涨(最多补到 CpMax)。返回实际补了多少(满费时是 0)。
+    /// </summary>
+    public int RefundCp(int amount)
+    {
+        int gained = enemy.RefundCp(amount);
+        if (gained <= 0) return 0;
+
+        RefreshHud();
+        CpChanged?.Invoke(Cp, CpMax);
+
+        Debug.Log($"[EnemyDeck] 敌方回复 {gained} 点费用,现在是 {Cp}/{CpMax}");
         return gained;
     }
 

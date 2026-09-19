@@ -286,11 +286,13 @@ public class CommandPointController : MonoBehaviour
     }
 
     /// <summary>
-    /// 抬 CP 上限 —— 后期"费用上限 +N"类卡牌的入口(策划案里还没出这类牌)。
+    /// 抬 CP 上限 —— 「过费类」卡牌(数据表:费用上限+1 / +2)的入口,由
+    /// CardEffectResolver.ResolvePlayCostEffects 在扣完卡费之后调用。
     ///
-    /// 自然增长只到 PlayerState.CpGrowthCap(12) 就停,
-    /// 12 以上的部分只能靠这个方法来加;而不管谁加,都越不过 PlayerState.CpMaxLimit(24)。
-    /// 返回实际涨了多少(顶到 24 之后是 0)。
+    /// 自然增长只到 PlayerState.CpGrowthCap(12) 就停,12 以上的部分只能靠这个方法来加;
+    /// 而不管谁加,都越不过 PlayerState.CpMaxLimit(24)。返回实际涨了多少(顶到 24 之后是 0)。
+    ///
+    /// 只有登记了 CardEffectKind.RaiseCpMax 的卡会调到这里。别的卡、别的类型都不可能改上限。
     /// </summary>
     public int IncreaseCpMax(int amount)
     {
@@ -306,6 +308,26 @@ public class CommandPointController : MonoBehaviour
         if (gained > 0) Debug.Log($"[CP] CP 上限 +{gained}(卡牌/调试),现在是 {Cp}/{CpMax}");
         else if (localPlayer.IsAtMaxLimit) Debug.Log($"[CP] CP 上限已经到硬顶 {PlayerState.CpMaxLimit},加不上去了");
 
+        return gained;
+    }
+
+    /// <summary>
+    /// 回费 —— 「回费类」卡牌(数据表:回复 x 点费用)的入口,同样在扣完卡费之后调用。
+    ///
+    /// 只补当前费用,**上限不涨**:最多补到 CpMax,已花掉的补回来但不会超出上限。
+    /// 返回实际补了多少(满费时是 0)。只有登记了 CardEffectKind.RefundCp 的卡会调到这里。
+    /// </summary>
+    public int RefundCp(int amount)
+    {
+        if (localPlayer == null) return 0;
+
+        int gained = localPlayer.RefundCp(amount);
+        if (gained <= 0) return 0;
+
+        RefreshHud();
+        CpChanged?.Invoke(Cp, CpMax);
+
+        Debug.Log($"[CP] 回复 {gained} 点费用,现在是 {Cp}/{CpMax}");
         return gained;
     }
 

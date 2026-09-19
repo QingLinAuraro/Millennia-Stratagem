@@ -11,6 +11,8 @@ public enum CardEffectKind
     [Description("弃置手牌")] DiscardHand,        // 弃置敌方手牌(被弃的牌直接退场,§5.4)
     [Description("压制")] Restrict,              // 压制:限制目标一回合行动
     [Description("召唤(牌堆)")] Summon,           // 召唤:往牌堆里加一张牌(§4.3 召唤(牌堆))
+    [Description("费用上限+N")] RaiseCpMax,       // 过费类(数据表:固定3费卡=N1 / 固定5费卡=N2);抬**上限**,走硬顶 24
+    [Description("回复N点费用")] RefundCp,        // 回费类(数据表:x-2 费卡回复 x,2<=x<=5);补**当前费用**,不许回超上限
 }
 
 /// <summary>效果的结算范围:打谁 / 加谁 / 回谁</summary>
@@ -64,6 +66,12 @@ public enum CombatClass
 ///       Caster = 出牌方自己(「为一座己方建筑回复 HP」这种无目标写法)。
 ///     · targetSlot:绑这张卡的第几个目标。
 ///     · atkValue / hpValue:只有 kind == Buff 用;atkValue 是 ATK 增减,hpValue 是 HP 增减(可为负)。
+///
+/// 【费用类效果(过费 / 回费)的特殊之处】
+///   kind = RaiseCpMax / RefundCp 这两条**不在这里结算,也不会在 Resolve 里生效** ——
+///   它们必须等这张卡自己的费用扣完之后再动手(回费尤其:先补费再扣费等于把卡费退了)。
+///   所以结算顺序是:BattlefieldManager 先扣费,再调 CardEffectResolver.ResolvePlayCostEffects。
+///   两张卡的详情见文件末尾 RaiseCpMax / RefundCp 两个工厂方法的注释。
 /// </summary>
 public class CardEffect
 {
@@ -138,6 +146,8 @@ public class CardEffect
             case CardEffectKind.DiscardHand:  return $"弃置敌方 {amount} 张手牌";
             case CardEffectKind.Restrict:     return $"限制{ScopeName(scope)} {amount} 回合行动";
             case CardEffectKind.Summon:       return $"召唤「{summonCardId}」×{summonCount} 进牌堆";
+            case CardEffectKind.RaiseCpMax:   return amount >= 0 ? $"费用上限 +{amount}" : $"费用上限 {amount}";
+            case CardEffectKind.RefundCp:     return $"回复 {amount} 点费用";
             default:                          return "（无效果）";
         }
     }
@@ -187,6 +197,33 @@ public class CardEffect
     public static CardEffect Summon(string summonCardId, int summonCount = 1)
         => Create(CardEffectKind.Summon, 0, CardEffectScope.Caster, CardEffectTargetSlot.Primary,
                   summonCardId: summonCardId, summonCount: summonCount);
+
+    // ===== 费用类效果(唯二会动 CP 的效果)=====
+
+    /// <summary>
+    /// 过费类:CP 上限 +amount(数据表:费用上限+1 = 3费卡,费用上限+2 = 5费卡)。
+    ///
+    /// 动的是**上限**(PlayerState.cpBonus 那一层),不是当前费用 —— 上限只受硬顶
+    /// PlayerState.CpMaxLimit(24) 限制,不受自然增长封顶 CpGrowthCap(12) 的限制
+    /// (12 以上的部分只能靠这条效果拿到)。
+    ///
+    /// **只抬天花板,不送费**:打完当下手里的费用不变,新开出来的空间要靠回费卡去回。
+    /// 所以 12 点的自然增长封顶之上,只有「过费 + 回费」配合才真能用得上。
+    ///
+    /// amount 传负数就是降上限(粮草被焚走的是另一条路,不走效果)。
+    /// </summary>
+    public static CardEffect RaiseCpMax(int amount)
+        => Create(CardEffectKind.RaiseCpMax, amount, CardEffectScope.Caster);
+
+    /// <summary>
+    /// 回费类:回复 amount 点费用(数据表:回复 x 点费用 = x-2 费卡,2&lt;=x&lt;=5)。
+    ///
+    /// 动的是**当前费用**,上限不涨。回费**最多补到这一回合的 CP 上限(cpMax)**,
+    /// 已经花掉的补回来,但不会凭空超出上限(所以满费时打它是白打,结算器会明说"费用已满")。
+    /// 一定要在**扣掉这张卡自己的费用之后**再结算,否则先补满再扣费就是把卡费也一起返还了。
+    /// </summary>
+    public static CardEffect RefundCp(int amount)
+        => Create(CardEffectKind.RefundCp, amount, CardEffectScope.Caster);
 }
 
 /// <summary>

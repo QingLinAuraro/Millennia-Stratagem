@@ -7,6 +7,10 @@ using UnityEngine;
 /// 出牌流程里它插在「扣费/弃牌」之前:BattlefieldManager 先问 CanResolve(这张牌现在打出去有没有用),
 /// 再 Resolve 一次把效果全部结算完,然后才扣 CP、才把牌退场 —— 这样不会出现「费扣了、牌没了、效果空放」。
 ///
+/// **例外是费用类效果(过费 / 回费)**:它们反过来要等卡费扣完再结算,所以不在 Resolve 里,
+/// 由 BattlefieldManager 扣完卡费后调 ResolvePlayCostEffects 单独处理。理由是回费:
+/// 先补费再扣卡费 = 把自己的卡费也退了,4 费的回费卡变成净赚。详见那个方法的注释。
+///
 /// 一张卡的效果表来自 CardEffectDatabase(按 cardId 登记);多目标策略卡(决水灌城 / 盐铁论)的
 /// 第 2、3 个目标 CardData 里没字段可放,由这里按「自动挑一个最合适的」补齐。
 ///
@@ -86,6 +90,55 @@ public static class CardEffectResolver
         public int HandCount => IsLocal
             ? (LocalDeck != null ? LocalDeck.HandCount : 0)
             : (EnemyDeckCtrl != null ? EnemyDeckCtrl.HandCount : 0);
+
+        // ── 费用(过费 / 回费)────────────────────────────────────────────
+        //
+        // 费用是本工程里**唯一**会被两个系统同时改的东西:回合自然增长(PlayerState.BeginTurn)
+        // 和卡牌效果。为了让"哪张卡动了费用"永远查得清,入口只留下面两个,而且只由
+        // ResolvePlayCostEffects 在扣完卡费之后调用 —— 别的地方不要直接动 CP。
+        //
+        // 走两个控制器而不是直接改 PlayerState,是因为它们要顺手刷 HUD + 广播 CpChanged,
+        // 绕过它们改数字会出现"HUD 显示的费用和实际不符(卡牌变灰/变亮判断错)"。
+
+        /// <summary>这一方当前还有多少费用</summary>
+        public int Cp => IsLocal
+            ? (CommandPointController.Instance != null ? CommandPointController.Instance.Cp : 0)
+            : (EnemyDeckCtrl != null ? EnemyDeckCtrl.Cp : 0);
+
+        /// <summary>这一方这一回合的费用上限</summary>
+        public int CpMax => IsLocal
+            ? (CommandPointController.Instance != null ? CommandPointController.Instance.CpMax : 0)
+            : (EnemyDeckCtrl != null ? EnemyDeckCtrl.CpMax : 0);
+
+        /// <summary>抬自己这一方的费用上限(过费类)。返回实际涨了多少(顶硬顶 24 之后是 0)</summary>
+        public int RaiseCpMax(int amount)
+        {
+            if (amount == 0) return 0;
+
+            if (IsLocal)
+            {
+                var cp = CommandPointController.Instance;
+                return cp != null ? cp.IncreaseCpMax(amount) : 0;
+            }
+
+            var enemy = EnemyDeckCtrl;
+            return enemy != null ? enemy.IncreaseCpMax(amount) : 0;
+        }
+
+        /// <summary>给自己这一方回费(回费类)。只补到上限为止,返回实际补了多少(满费时是 0)</summary>
+        public int RefundCp(int amount)
+        {
+            if (amount <= 0) return 0;
+
+            if (IsLocal)
+            {
+                var cp = CommandPointController.Instance;
+                return cp != null ? cp.RefundCp(amount) : 0;
+            }
+
+            var enemy = EnemyDeckCtrl;
+            return enemy != null ? enemy.RefundCp(amount) : 0;
+        }
 
         /// <summary>随机弃掉自己 count 张手牌,返回弃掉几张(被弃的牌直接退场,§5.4)</summary>
         public int DiscardRandom(int count)
@@ -221,6 +274,19 @@ public static class CardEffectResolver
                 case CardEffectKind.Summon:
                     anyViable = true;
                     break;
+
+                // ── 费用类效果 ──
+                // 过费:+上限任何回合都成立,永远算"打得出去"。
+                case CardEffectKind.RaiseCpMax:
+                    anyViable = true;
+                    break;
+
+                // 回费:只有费用没满时才有意义。满费(或超了)说明这张牌打出去什么都回不了,
+                // 和"没有目标"一样属于空放,所以不放行、也不扣费。
+                case CardEffectKind.RefundCp:
+                    if (caster.Cp < caster.CpMax) anyViable = true;
+                    else if (reason == null) reason = $"费用已满（{caster.Cp}/{caster.CpMax}），回复费用没有意义";
+                    break;
             }
         }
 
@@ -243,6 +309,8 @@ public static class CardEffectResolver
     /// <summary>
     /// 把这张卡的效果全部结算一遍。返回一句可以飘出来的结果说明。
     /// 出牌流程要在扣费之前调它 —— 返回 false 就说明这张牌不该被打出去。
+    ///
+    /// **不包含费用类效果**(过费 / 回费):那两条要等卡费扣完再由 ResolvePlayCostEffects 结算。
     /// </summary>
     public static bool Resolve(CardData card, Caster caster, FieldUnit primaryUnit, BattleRow primaryRow, out string message)
     {
@@ -268,6 +336,74 @@ public static class CardEffectResolver
         return true;
     }
 
+    /// <summary>
+    /// 这条效果是不是"改费用"的那种。这类效果**不在 Resolve 里结算** ——
+    /// 它们必须等这张卡自己的费用扣完再动手(回费先补再扣等于把卡费也退了),见 ResolvePlayCostEffects。
+    /// </summary>
+    public static bool IsPlayCostEffect(CardEffectKind kind)
+        => kind == CardEffectKind.RaiseCpMax || kind == CardEffectKind.RefundCp;
+
+    // ================================================================ 费用类效果(过费 / 回费)
+
+    /// <summary>
+    /// 结算这张卡里的**费用类效果**(过费 / 回费),返回一句可读说明(没有这类效果就返回 null)。
+    ///
+    /// 【为什么不在 Resolve 里一起做,为什么必须扣完费再调】
+    ///   出牌流程是"先 Resolve 效果、后扣卡费"(§7.2.1,这样不会出现"费扣了、牌没了、效果空放")。
+    ///   但对费用类效果,这个顺序恰好是错的:回费卡如果先补费再扣卡费,等于把自己的卡费也一起退给你,
+    ///   4 费的回费卡反而净赚。所以费用类效果单独拎出来,等 BattlefieldManager 扣完卡费再走这里。
+    ///
+    /// 【只认登记过效果的卡】
+    ///   这里只遍历**这张卡自己登记的效果**(CardEffectDatabase 按 cardId 建的表)。
+    ///   卡面上没有这两条效果 → 这个方法什么都不做 → 打出去一分费用都不动。
+    ///   这就是"别的类型卡牌不会导致费用异常变更"的保证:费用变更没有一刀切规则,只有逐卡声明。
+    ///
+    /// 没落到实处会明说(顶到硬顶 24 / 费用已满),因为那时 CanResolve 放行了但实际什么也没发生,
+    /// 不报一句玩家会以为卡白打了。
+    /// </summary>
+    public static string ResolvePlayCostEffects(CardData card, Caster caster)
+    {
+        if (card == null || caster == null) return null;
+
+        var set = CardEffectDatabase.Get(card);
+        if (set.IsEmpty) return null;
+
+        var parts = new List<string>();
+
+        for (int i = 0; i < set.effects.Count; i++)
+        {
+            var effect = set.effects[i];
+            if (!IsPlayCostEffect(effect.kind)) continue;
+
+            switch (effect.kind)
+            {
+                case CardEffectKind.RaiseCpMax:
+                {
+                    int gained = caster.RaiseCpMax(effect.amount);
+                    parts.Add(gained > 0
+                        ? $"费用上限 +{gained}（现在 {caster.CpMax}）"
+                        : $"费用上限已经到硬顶 {PlayerState.CpMaxLimit}，加不上去了");
+                    break;
+                }
+
+                case CardEffectKind.RefundCp:
+                {
+                    int gained = caster.RefundCp(effect.amount);
+                    parts.Add(gained > 0
+                        ? $"回复 {gained} 点费用（现在 {caster.Cp}/{caster.CpMax}）"
+                        : $"费用已满（{caster.Cp}/{caster.CpMax}），没有可回复的费用");
+                    break;
+                }
+            }
+        }
+
+        if (parts.Count == 0) return null;
+
+        string message = string.Join("；", parts);
+        Debug.Log($"[效果/费用] 「{card.cardName}」：{message}");
+        return message;
+    }
+
     /// <summary>结算一条效果,返回这句效果的可读结果(null = 没落到实处)</summary>
     private static string ApplyEffect(CardEffect effect, Caster caster, FieldUnit primaryUnit, BattleRow primaryRow)
     {
@@ -280,6 +416,13 @@ public static class CardEffectResolver
             case CardEffectKind.DiscardHand:  return ApplyDiscard(effect, caster);
             case CardEffectKind.Restrict:     return ApplySuppress(effect, caster, primaryUnit);
             case CardEffectKind.Summon:       return ApplySummon(effect, caster);
+
+            // 费用类效果刻意不在这里结算(此刻卡费还没扣)。真在 Resolve 里被结算了就是流程错了。
+            case CardEffectKind.RaiseCpMax:
+            case CardEffectKind.RefundCp:
+                Debug.LogWarning($"[效果] {effect.Describe()} 不能在 Resolve 里结算 —— 它要等扣完卡费再走 ResolvePlayCostEffects,这里跳过。");
+                return null;
+
             default:                          return null;
         }
     }

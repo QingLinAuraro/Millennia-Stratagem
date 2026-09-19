@@ -43,13 +43,8 @@ public class PlayerState
     }
     /// <summary>
     /// 进入新回合:回合数决定的那部分上限**按回合数重算**(不是累加),然后补满当前 CP。
-    ///
     /// cpFromRounds = clamp(起始值 + (round - 1) × growth, 0, CpGrowthCap):
     ///   growth 是**每回合的增长值**(增量,不是倍率),第 1 回合是起始值、不走增长。
-    ///   growth = 1、起始 1 时:1,2,3,…,11,**第 12 回合起恒为 12**。
-    ///   growth = 2、起始 1 时:1,3,5,…,11,第 7 回合到 12 封顶。
-    ///   growth ≤ 0 视为不增长(Mathf.Max 兜住),上限就停在起始值上,不会往回扣。
-    /// (以前是"每次调用 += growth",同一回合被调两次就白涨一格,而且超出 CpGrowthCap 的回合完全停涨。)
     /// </summary>
     public void BeginTurn(int round, int growth = 1)
     {
@@ -58,13 +53,6 @@ public class PlayerState
         cp = cpMax;
     }
 
-    /// <summary>
-    /// CP 上限增减(卡牌效果 / 粮草被焚 / 调试键的唯一入口)。只动**卡牌层** cpBonus,
-    /// 回合数算出来的 cpFromRounds 一律不碰 —— 所以卡牌减上限顶多把 cpBonus 压到
-    /// -cpFromRounds(cpMax 归 0),压不掉自然增长那部分;硬顶仍是 CpMaxLimit(24)。
-    ///
-    /// delta 可正可负,+N 和 -N 走同一条路。返回夹过之后的 cpMax(不是增量)。
-    /// </summary>
     public int ChangeBonus(int delta)
     {
         cpBonus = Mathf.Clamp(cpBonus + delta, -cpFromRounds, CpMaxLimit - cpFromRounds);
@@ -73,6 +61,22 @@ public class PlayerState
             cp = cpMax;
         }
         return cpMax;
+    }
+
+    /// <summary>
+    /// 回费(「回复 x 点费用」)。只补**当前费用**,上限一分不涨 —— 走的是「已经花掉的补回来」,
+    /// 不是「凭空突破上限」。所以返回值是**实际补了多少**,回费卡在满费时打出去就是 0。
+    ///
+    /// 上限是 cpMax(自然增长 + 卡牌加成),这里不碰 cpFromRounds,也不碰 cpBonus:
+    /// 回费永远无法让这一回合的费用超过上限,也就不可能靠回费堆出超额的牌序。
+    /// </summary>
+    public int RefundCp(int amount)
+    {
+        if (amount <= 0) return 0;
+
+        int before = cp;
+        cp = Mathf.Clamp(cp + amount, 0, cpMax);
+        return cp - before;
     }
 
     public bool IsGrowthCapped => cpFromRounds >= CpGrowthCap;

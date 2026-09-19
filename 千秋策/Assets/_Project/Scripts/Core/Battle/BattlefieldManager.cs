@@ -1008,7 +1008,12 @@ public class BattlefieldManager : MonoBehaviour
         }
 
         BattleSettlement.CountTacticPlayed(casterSide);
-        message = result;
+
+        // 费用类效果(过费 / 回费)必须等卡费扣完再结算 —— 回费先补再扣等于把卡费也退了。
+        // 没登记这两条效果的卡,这里什么都不做,所以别的策略牌不会影响费用。
+        string costResult = CardEffectResolver.ResolvePlayCostEffects(card, caster);
+
+        message = string.IsNullOrEmpty(costResult) ? result : $"{result}；{costResult}";
 
         RefreshRaidFlags();
         BoardChanged?.Invoke();
