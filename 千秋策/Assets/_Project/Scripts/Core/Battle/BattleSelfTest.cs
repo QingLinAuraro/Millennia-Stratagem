@@ -316,9 +316,9 @@ public class BattleSelfTest : MonoBehaviour
             {
                 // 落点解析必须是"唯一权威":站在共享前军时,「中军」= 对面的中军。
                 // 这里直接验 ResolveMoveRow —— UI 和 AI 都调它,以前三处各算一份,算错的就是这一条。
-                var resolved = board.ResolveMoveRow(frontUnit, BattleRowType.Mid);
+                var resolved = board.ResolveMoveRowTo(frontUnit, BattleRowType.Mid);
                 Check(resolved == board.EnemyMid,
-                      "站在共享前军时「中军」解析为敌方中军（ResolveMoveRow）",
+                      "站在共享前军时「中军」解析为敌方中军（ResolveMoveRowTo）",
                       $"解析成了 {resolved?.DisplayName ?? "null"}");
 
                 board.MoveUnit(frontUnit, BattleRowType.Mid, out _);
@@ -457,7 +457,7 @@ public class BattleSelfTest : MonoBehaviour
                           "站在共享前军上往前走 = 我方中军（不能算成敌方后军）",
                           $"算成了 {fSide}/{fType}");
 
-                var forward = board.ResolveMoveRow(hisMidUnit, BattleRowType.Front);
+                var forward = board.ResolveMoveRowTo(hisMidUnit, BattleRowType.Front);
                 Check(forward == board.PlayerFront,
                       "敌方中军单位往前一步解析到共享前军",
                       $"解析成了 {forward?.DisplayName ?? "null"}");

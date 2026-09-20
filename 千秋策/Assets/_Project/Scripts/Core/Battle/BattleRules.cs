@@ -73,6 +73,13 @@ public static class BattleRules
     }
 
     /// <summary>
+    /// 对面阵营。往前走的目标排属于哪一方,靠它换算;
+    /// 共享前军在全场只有一条(物理上就是 playerFront),所以"对面"只对手上的排类型有意义。
+    /// </summary>
+    internal static BattleSide MirrorSideFor(BattleSide side)
+        => side == BattleSide.Player ? BattleSide.Enemy : BattleSide.Player;
+
+    /// <summary>
     /// 从 unit 所在的 from 排**往前走一步**会到哪条排(排距 1)。到头了(已经在对方后军)返回 false。
     ///
     /// ⚠ 方向必须按**单位自己的阵营**算,不能按 `from.Side` ——
@@ -121,6 +128,116 @@ public static class BattleRules
                 return false;
         }
     }
+
+    /// <summary>
+    /// 从 unit 所在的 from 排**往后走一步**会到哪条排(排距 1)。后军不能再退、己方中军不能后退,返回 false。
+    ///
+    /// 和 TryForwardRow 是镜像的一对,同样是**明文查表**、同样按 `unit.Side` 算方向。
+    /// 合法的情况只有两种:
+    ///   · 站在共享前军 → 回自己中军(§7.4 袭扰撤回。注意共享前军 physical 是 playerFront,
+    ///     `from.Side` 恒为 Player,所以这里必须看 `unit.Side`,否则敌方骑兵永远退不回去);
+    ///   · 站在对面中军(袭扰中)→ 回共享前军。`from.Side != unit.Side` 就是"这条中军不是我的"。
+    /// </summary>
+    public static bool TryBackwardRow(FieldUnit unit, BattleRow from, out BattleSide side, out BattleRowType type)
+    {
+        // 失败时按原样返回,调用方照着打日志就能看见"我以为在哪、实际在哪"
+        side = unit != null ? unit.Side : (from != null ? from.Side : BattleSide.Player);
+        type = from != null ? from.RowType : BattleRowType.Mid;
+        if (from == null || unit == null) return false;
+
+        switch (from.RowType)
+        {
+            // 共享前军:谁站在这儿都是"往前顶过了头",后退一步回的是**自己的**中军
+            case BattleRowType.Front:
+                side = unit.Side;                  // 不能写 BattleSide.Player:from.Side 恒为 Player
+                type = BattleRowType.Mid;
+                return true;
+
+            // 对面中军(袭扰中):退一步回共享前军
+            case BattleRowType.Mid:
+                if (from.Side == unit.Side) return false;   // 自己的中军:规则上不允许主动后退
+                side = BattleSide.Player;                   // 共享前军物理上就是 playerFront
+                type = BattleRowType.Front;
+                return true;
+
+            // 后军 / 中军都没有"再往后"这一档(§2.3 只有三档)
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// 一个方向上的"相邻下一步"结果。
+    /// 让"排类型 → 方向"这件事不再需要在每个调用点各算一份:
+    /// 调用方只要说"我要往前走 / 我要往后走",由这里给出**是否合法**和**落到哪条排**。
+    /// </summary>
+    public readonly struct MoveStep
+    {
+        /// <summary>这一步合不合法(不合法时 Row 一定是 null)</summary>
+        public bool Legal { get; }
+
+        /// <summary>走这一步会落到哪条排。不合法时为 null</summary>
+        public BattleRow Row { get; }
+
+        /// <summary>不合法时的原因,可飘字</summary>
+        public string Reason { get; }
+
+        /// <summary>这一步是不是"后撤"(撤回共享前军,不占新位置、不受容量限制)</summary>
+        public bool IsRetreat { get; }
+
+        private MoveStep(bool legal, BattleRow row, string reason, bool isRetreat)
+        {
+            Legal = legal;
+            Row = row;
+            Reason = reason;
+            IsRetreat = isRetreat;
+        }
+
+        /// <summary>合法:落到 row。isRetreat 为真表示这是后撤</summary>
+        public static MoveStep Ok(BattleRow row, bool isRetreat = false) => new(true, row, null, isRetreat);
+
+        /// <summary>不合法:带原因</summary>
+        public static MoveStep Illegal(string reason) => new(false, null, reason, false);
+    }
+
+    /// <summary>
+    /// 按单位**当前所在的行**和前进/后退方向算出落点(§2.3 相邻前进 / §7.4 袭扰撤回)。
+    /// 方向按 `unit.Side` 算,目标排按算出来的 (side, type) 去真实排表里取 —— 共享前军那条
+    /// 全场的唯一一条就是这么取到的,不会出现"自己另算一份、和别处对不上"。
+    /// </summary>
+    public static MoveStep ResolveMove(FieldUnit unit, MoveDirection direction)
+    {
+        if (unit == null) return MoveStep.Illegal("没有要移动的单位");
+        if (unit.Row == null) return MoveStep.Illegal("这个单位没站在任何一条排上");
+
+        var board = BattlefieldManager.Instance;
+        if (board == null) return MoveStep.Illegal("战场上还没有排");
+
+        bool forward = direction == MoveDirection.Forward;
+
+        // 先按方向问 BattleRules"相邻下一步是哪条排"(明文查表,方向按 unit.Side 算)
+        if (forward ? TryForwardRow(unit, unit.Row, out var side, out var type)
+                    : TryBackwardRow(unit, unit.Row, out side, out type))
+        {
+            var row = board.FindRow(side, type);
+            if (row == null) return MoveStep.Illegal($"{SideName(side)}{type}这条排不在场上");
+
+            return MoveStep.Ok(row, IsRetreatInto(unit, row));
+        }
+
+        return MoveStep.Illegal(forward ? "已经在最前排，无法继续前进" : "后军无法再后退");
+    }
+
+    /// <summary>
+    /// 这一步算不算"后撤"。判据和 CanMoveTo 里的 isRetreat **完全一致**:
+    /// 只有"袭扰中的骑兵撤回共享前军"才是后撤(它不占新位置、不受容量限制)。
+    ///
+    /// ⚠ 不能简单写成"方向 == 后退":前进进入敌方中军是**袭扰**,不是后撤 ——
+    /// 用方向去推会让"1 血骑兵袭扰进敌方中军"被当成后撤,跳过容量判定,
+    /// 表现成"满员的中军还能再挤进去一个"。
+    /// </summary>
+    private static bool IsRetreatInto(FieldUnit unit, BattleRow target)
+        => unit != null && unit.IsRaiding && target != null && target.RowType == BattleRowType.Front;
 
     /// <summary>某一方的中军(大营所在的那条排)。场上还没摆好时返回 null</summary>
     public static BattleRow MidRowOf(BattleSide side)

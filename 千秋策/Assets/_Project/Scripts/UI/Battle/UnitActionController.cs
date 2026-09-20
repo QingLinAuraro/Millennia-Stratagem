@@ -482,8 +482,8 @@ public class UnitActionController : MonoBehaviour
     /// </summary>
     private static BattleRow RowCarrierFor(FieldUnit unit, BattleRowType type)
     {
-        var board = BattlefieldManager.Instance;
-        return board != null ? board.ResolveMoveRow(unit, type) : null;
+        var board = BattlefieldManager.Instance as BattlefieldManager;
+        return board != null ? board.ResolveMoveRowTo(unit, type) : null;
     }
 
     /// <summary>拖动开始时,把所有"能落到"的排标成绿色(§10.2 合法落点高亮)</summary>

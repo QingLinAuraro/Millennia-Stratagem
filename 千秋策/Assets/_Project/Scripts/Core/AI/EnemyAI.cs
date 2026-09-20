@@ -712,8 +712,8 @@ public class EnemyAI : MonoBehaviour
     /// </summary>
     private static BattleRow FindRowForMove(FieldUnit unit, BattleRowType type)
     {
-        var board = BattlefieldManager.Instance;
-        return board != null ? board.ResolveMoveRow(unit, type) : null;
+        var board = BattlefieldManager.Instance as BattlefieldManager;
+        return board != null ? board.ResolveMoveRowTo(unit, type) : null;
     }
 
     private static string RowName(BattleRowType type) => type switch
@@ -735,8 +735,8 @@ public class EnemyAI : MonoBehaviour
         var board = BattlefieldManager.Instance;
         if (board == null) return RowName(targetType);
 
-        // 落点解析统一走 ResolveMoveRow,日志和判定才不会各说各话
-        var row = board.ResolveMoveRow(unit, targetType);
+        // 落点解析统一走 ResolveMoveRowTo,日志和判定才不会各说各话
+        var row = board.ResolveMoveRowTo(unit, targetType);
         return row != null ? row.DisplayName : RowName(targetType);
     }
 
