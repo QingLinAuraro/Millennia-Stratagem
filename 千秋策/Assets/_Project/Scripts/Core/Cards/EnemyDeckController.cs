@@ -507,6 +507,16 @@ public class EnemyDeckController : MonoBehaviour
     /// </summary>
     private List<CardData> BuildDeckList()
     {
+        // 最优先:主菜单带进来的敌方卡组(现在是 AI 随机构筑的一套)。
+        // BattleContext 是跨场景静态中转 —— 场景在切到 Battle 时被重建,但静态字段还在。
+        var fromMenu = BattleContext.OpponentDeck;
+        if (fromMenu != null && fromMenu.cards != null && fromMenu.cards.Count > 0)
+        {
+            Debug.Log($"[EnemyDeck] 用主菜单带来的敌方卡组「{fromMenu.deckName}」{fromMenu.cards.Count} 张" +
+                      (BattleContext.OpponentIsRandom ? "(随机构筑)" : ""));
+            return new List<CardData>(fromMenu.cards);
+        }
+
         if (deckList != null && deckList.Count > 0) return new List<CardData>(deckList);
 
         var local = FindObjectOfType<DeckController>();

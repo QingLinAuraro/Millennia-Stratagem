@@ -4379,7 +4379,7 @@ MonoBehaviour:
   rowHeight: 144
   memberGap: 20
   lockRowLayout: 1
-  fieldCardPrefab: {fileID: 3553309683854948894, guid: 886e4dab6143ec443be9e123188a7c1e, type: 3}
+  fieldCardPrefab: {fileID: 7000000000000000001, guid: 886e4dab6143ec443be9e123188a7c1e, type: 3}
   fieldCardScale: 0.7
   fieldHoverPreview: 1
   buildPrefab: {fileID: 3395130883880239539, guid: 2a0724586730976438ddf285d4647bbe, type: 3}
@@ -4578,7 +4578,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   firstSide: 2
   autoStart: 1
-  cpGrowthPerTactic: 1
   enemyTurnSeconds: 2
   debugEndTurnOnKey: 1
   debugEndTurnKey: 116

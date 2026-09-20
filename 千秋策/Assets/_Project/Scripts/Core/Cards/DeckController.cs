@@ -62,10 +62,28 @@ public class DeckController : MonoBehaviour
 
     private void Start()
     {
-        if (deckList == null || deckList.Count == 0)
-            Debug.LogError("[DeckController] deckList 是空的,牌堆一开局就是 0 张。", this);
+        // 优先用主菜单选定的卡组(BattleContext 是跨场景的中转,见它的说明)。
+        // 场景里手拖的 deckList 现在是**兜底** —— 直接从 Battle 场景启动(调试)时才会用到,
+        // 那条路没有主菜单,带不进来卡组。
+        var source = deckList;
+        var fromMenu = BattleContext.PlayerDeck;
+        if (fromMenu != null && fromMenu.cards != null && fromMenu.cards.Count > 0)
+        {
+            source = fromMenu.cards;
+            Debug.Log($"[DeckController] 用主菜单选定的卡组「{fromMenu.deckName}」{source.Count} 张");
+        }
+        else if (source == null || source.Count == 0)
+        {
+            Debug.LogError("[DeckController] 既没有主菜单带来的卡组(BattleContext 为空)," +
+                           "场景里的 deckList 也是空的 —— 牌堆一开局就是 0 张。", this);
+        }
+        else if (source.Count != DeckPreset.DeckSize)
+        {
+            Debug.LogWarning($"[DeckController] 用的是场景里手拖的兜底卡组,{source.Count} 张" +
+                             $"(规则是 {DeckPreset.DeckSize} 张)。从主菜单进战斗才是正常流程。", this);
+        }
 
-        deck.Init(deckList ?? new List<CardData>());
+        deck.Init(source ?? new List<CardData>());
         RefreshDeckUI();
     }
 
