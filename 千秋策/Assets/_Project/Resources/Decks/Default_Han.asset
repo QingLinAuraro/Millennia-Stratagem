@@ -1,0 +1,54 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5662656d4d7fc4d41b1c59559bf2960f, type: 3}
+  m_Name: Default_Han
+  m_EditorClassIdentifier: 
+  deckName: "\u6C49\xB7\u5175\u79CD\u6DF7\u6742"
+  primaryDynasty: "\u6C49"
+  description: "\u6B65\u9A91\u5F13\u6DF7\u6742\u7684\u4E2D\u519B\u6D41:\u6750\u5B98\u9A91\u58EB\u95EA\u51FB\u62A2\u8282\u594F,\u6E38\u5FBC\u9A91\u4E0E\u5C04\u58F0\u58EB\u8FDE\u6218\u6EDA\u96EA\u7403\u3002"
+  cards:
+  - {fileID: 11400000, guid: 18f25ba000da1fd889666c1c86e424ad, type: 2}
+  - {fileID: 11400000, guid: 18f25ba000da1fd889666c1c86e424ad, type: 2}
+  - {fileID: 11400000, guid: 18f25ba000da1fd889666c1c86e424ad, type: 2}
+  - {fileID: 11400000, guid: 18f25ba000da1fd889666c1c86e424ad, type: 2}
+  - {fileID: 11400000, guid: f23d8e61b61f118af16ff5df6c51a93a, type: 2}
+  - {fileID: 11400000, guid: f23d8e61b61f118af16ff5df6c51a93a, type: 2}
+  - {fileID: 11400000, guid: f23d8e61b61f118af16ff5df6c51a93a, type: 2}
+  - {fileID: 11400000, guid: f23d8e61b61f118af16ff5df6c51a93a, type: 2}
+  - {fileID: 11400000, guid: 32bb5958d4af7340e59d48247a216860, type: 2}
+  - {fileID: 11400000, guid: 32bb5958d4af7340e59d48247a216860, type: 2}
+  - {fileID: 11400000, guid: 62fccb9fb08e53ddebe3f84f8650e984, type: 2}
+  - {fileID: 11400000, guid: 0c8b9d812fe8cf857788f3e4bac65fd8, type: 2}
+  - {fileID: 11400000, guid: de4fba604393df27038a94b62add5d47, type: 2}
+  - {fileID: 11400000, guid: ba35fe0ed59b9bb41bad3985afc085be, type: 2}
+  - {fileID: 11400000, guid: ba35fe0ed59b9bb41bad3985afc085be, type: 2}
+  - {fileID: 11400000, guid: 448d102a6a9f4abeb4f16f4ecde5d67b, type: 2}
+  - {fileID: 11400000, guid: 448d102a6a9f4abeb4f16f4ecde5d67b, type: 2}
+  - {fileID: 11400000, guid: 04a100ed12332d67ed1c203b049b291e, type: 2}
+  - {fileID: 11400000, guid: 04a100ed12332d67ed1c203b049b291e, type: 2}
+  - {fileID: 11400000, guid: 04a100ed12332d67ed1c203b049b291e, type: 2}
+  - {fileID: 11400000, guid: d8781a3528ac2aaa233bc2d2658f7687, type: 2}
+  - {fileID: 11400000, guid: d8781a3528ac2aaa233bc2d2658f7687, type: 2}
+  - {fileID: 11400000, guid: 05ec059652b3eafccb8f8c7f20827bb0, type: 2}
+  - {fileID: 11400000, guid: dc7fb309858d528da2a404ca7476d14a, type: 2}
+  - {fileID: 11400000, guid: cb74141471fa9cba70d50212db802730, type: 2}
+  - {fileID: 11400000, guid: 4e71c43d08d6741c39e0a4d731baf811, type: 2}
+  - {fileID: 11400000, guid: cb3948c91f4c2e34ab4812ec7c04a296, type: 2}
+  - {fileID: 11400000, guid: cb3948c91f4c2e34ab4812ec7c04a296, type: 2}
+  - {fileID: 11400000, guid: c36fc4b2c544ccc009900671a602ccf8, type: 2}
+  - {fileID: 11400000, guid: c36fc4b2c544ccc009900671a602ccf8, type: 2}
+  quota:
+    ordinary: 12
+    rare: 8
+    epic: 4
+    legend: 2
+    flexible: 4

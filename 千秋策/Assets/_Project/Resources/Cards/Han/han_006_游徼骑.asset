@@ -10,15 +10,15 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: bfcf2cc80a34fa94dadbc55e6db77a79, type: 3}
-  m_Name: han_006_游徼骑
+  m_Name: "han_006_\u6E38\u5FBC\u9A91"
   m_EditorClassIdentifier: 
   cardId: han_006
-  cardName: 游徼骑
-  dynasty: 汉
+  cardName: "\u6E38\u5FBC\u9A91"
+  dynasty: "\u6C49"
   rarity: 0
   cardType: 0
   artwork: {fileID: 0}
-  flavorText: 繇役轻骑，往来如风。
+  flavorText: "\u7E47\u5F79\u8F7B\u9A91\uFF0C\u5F80\u6765\u5982\u98CE\u3002"
   effectText: 
   deploymentCost: 3
   actionCost: 2
@@ -27,7 +27,5 @@ MonoBehaviour:
   hp: 4
   unitType: 1
   weight: 1
-  keywords:
-  - Blitz
-  - DoubleStrike
+  keywords: 0000000004000000
   targetType: 0

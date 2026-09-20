@@ -29,7 +29,9 @@ import hashlib
 import openpyxl
 
 XLSX = r"Docs\数据表demo.xlsx"
-ROOT = r"千秋策\Assets\_Project\Data\Cards"
+# 卡牌必须放在 Resources 下,运行时才能用 Resources.LoadAll<CardData>("Cards") 扫出整个卡池
+# (CardLibrary.CardsResourcePath = "Cards")。改这个路径要同步改 CardLibrary 里的常量。
+ROOT = r"千秋策\Assets\_Project\Resources\Cards"
 
 # CardData.cs 的 m_Script guid（Assets/_Project/Scripts/Core/Data/CardData.cs.meta）
 CARD_DATA_GUID = "bfcf2cc80a34fa94dadbc55e6db77a79"
