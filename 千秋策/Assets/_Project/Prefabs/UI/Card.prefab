@@ -1437,8 +1437,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cdbb62f3b059b134d8e8e6f00d8c4223, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  previewDelay: 0.5
-  fieldPreviewDelay: 0.25
+  previewDelay: 1
+  fieldPreviewDelay: 0.8
   previewOffset: 8
 --- !u!114 &7918463205517263841
 MonoBehaviour:

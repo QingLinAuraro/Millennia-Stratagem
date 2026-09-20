@@ -10,6 +10,15 @@ using UnityEngine.EventSystems;
 /// (表现成"拖不动",而且不报错)。所以干脆把这一层挂在兵牌自己身上:
 /// 事件一定先到这里,而这里一定能从同一个物体上拿到 FieldUnit,不必再靠射线去猜。
 ///
+/// 【为什么按住那一条不能当拖动的依据】—— 这里踩过一次坑,记下来:
+///   EventSystem 找处理者是"从命中物体开始,沿父链取**第一个**"。兵牌卡面(CardsInBattle 预制体)
+///   自己带 Canvas + GraphicRaycaster,而 CardHover 挂在卡面上、实现了 IPointerDownHandler ——
+///   于是按下事件停在卡面的 CardHover 上,**永远不会继续往上到本组件的 OnPointerDown**。
+///   而拖动那一条能到这里,只因为卡面上的 CardDragPlay 在战场卡上被 enabled = false 关掉了,
+///   父链上找不到 IBeginDragHandler,才继续往上落到本组件。
+///   结论:**拖动判定不能依赖 OnPointerDown 记下的状态**(UnitActionController.OnUnitBeginDrag
+///   已经改成自足判定,不再看 pressedUnit / pressPosition),否则卡面一挂 IPointerDownHandler 就拖不动。
+///
 /// 【挂载 & 调整】
 ///   挂在:不用手挂。BattlefieldManager.SpawnUnit 生成兵牌格子时会 AddComponent 一个。
 ///         建筑(SpawnBuilding)不挂 —— 建筑不能移动,拖它没有任何意义。

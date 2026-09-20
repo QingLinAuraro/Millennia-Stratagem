@@ -25,7 +25,7 @@ using UnityEngine.UI;
 ///     · enabled:整个组件就是"玩家能不能操作单位"的开关,关掉 = 只能出牌、不能移动/攻击(想临时锁操作就关它)。
 ///     · dragThreshold:超过多少像素才算"拖动"。调小 = 手一抖就变拖动(容易误发动作);调大 = 要拖得更明确。
 ///     · debugLog:把每次拖动/移动/攻击的判定过程打到 Console,调"拖不动"这类问题时打开。
-///     · infoFontSize / infoBottomOffset:说明文字的字号与位置(相对屏幕底部)。
+///     · highlightPadding:选中框相对卡面放大多少。
 /// </summary>
 [DisallowMultipleComponent]
 public class UnitActionController : MonoBehaviour
@@ -58,11 +58,7 @@ public class UnitActionController : MonoBehaviour
     [Tooltip("拖动时跟着指针的那个半透明方块的颜色")]
     [SerializeField] private Color dragMarkerColor = new(1f, 0.85f, 0.35f, 0.35f);
 
-    [Header("说明文字")]
-    [Tooltip("选中单位后屏幕下方那行说明的字号")]
-    [SerializeField] private float infoFontSize = 26f;
-    [Tooltip("说明文字离屏幕底边多高(像素)")]
-    [SerializeField] private float infoBottomOffset = 150f;
+    [Header("选中框")]
     [Tooltip("选中框相对卡面放大多少(1 = 正好贴住卡面)")]
     [SerializeField] private float highlightPadding = 1.12f;
 
@@ -72,7 +68,6 @@ public class UnitActionController : MonoBehaviour
 
     private FieldUnit selected;
     private RectTransform highlight;
-    private TMPro.TMP_Text infoText;
 
     // ---- 拖动状态 ----
     private FieldUnit dragUnit;          // 正在被拖的单位(拖动真正开始后才有值)
@@ -194,8 +189,8 @@ public class UnitActionController : MonoBehaviour
         if (board == null) return;
 
         var turn = TurnController.Instance;
-        if (BattleSettlement.MatchOver) { SetInfo("对局已经结束"); return; }
-        if (turn != null && turn.HasStarted && !turn.IsLocalTurn) { SetInfo("现在是对方的回合"); return; }
+        if (BattleSettlement.MatchOver) { ShowTip("对局已经结束", screenPosition); return; }
+        if (turn != null && turn.HasStarted && !turn.IsLocalTurn) { ShowTip("现在是对方的回合", screenPosition); return; }
 
         var unit = PickUnitUnderPointer(screenPosition);
 
@@ -210,12 +205,12 @@ public class UnitActionController : MonoBehaviour
         {
             if (selected == unit) { ClearSelection(); return; }
             Select(unit);
-            SetInfo($"已选中「{unit.DisplayName}」：拖动它到一条排 = 移动，拖到套红框的敌人身上 = 攻击");
+            ShowTip($"已选中「{unit.DisplayName}」：拖动它到一条排 = 移动，拖到套红框的敌人身上 = 攻击");
             return;
         }
 
         // 点到敌人:不在这里攻击(拖动才是动作),只说清楚该怎么打
-        SetInfo(selected != null
+        ShowTip(selected != null
             ? $"要攻击「{unit.DisplayName}」，请把「{selected.DisplayName}」拖到它身上"
             : $"先按住自己的兵牌选中，再把它拖到「{unit.DisplayName}」身上攻击");
     }
@@ -273,7 +268,6 @@ public class UnitActionController : MonoBehaviour
         selected = unit;
         MoveHighlight(unit);
         RefreshTargetFrames(unit);
-        RefreshInfo();
         if (debugLog) Debug.Log($"[操作] 选中「{unit.DisplayName}」");
     }
 
@@ -283,7 +277,6 @@ public class UnitActionController : MonoBehaviour
         // 选中框是挂在单位身上的:单位被销毁时它会跟着一起没,所以这里也要能容忍"已销毁"
         if (highlight != null) highlight.gameObject.SetActive(false);
         HideTargetFrames();
-        RefreshInfo();
     }
 
     // ================================================================ 拖动移动(§2.3)
@@ -291,7 +284,13 @@ public class UnitActionController : MonoBehaviour
     // 入口有三个,都从 FieldUnitDragProxy 转过来(它挂在兵牌自己身上,见那个文件的说明):
     // 把"哪个单位"直接传进来,不用再靠射线去猜指针底下是什么 —— 拖动的第一步就不会出错。
 
-    /// <summary>按下一个兵牌</summary>
+    /// <summary>
+    /// 按下一个兵牌。**这里记下的东西只用来算"位移够不够判定成拖动",不是拖动的必要条件** ——
+    /// 战场卡面自己带 Canvas + GraphicRaycaster,而 CardHover 挂在卡面上、实现了 IPointerDownHandler,
+    /// EventSystem 找处理者时"沿父链取第一个",按下会停在卡面的 CardHover 上,到不了兵牌格子上的
+    /// FieldUnitDragProxy。所以这个方法在战场上**通常根本不会被调用**(详见 FieldUnitDragProxy 的说明),
+    /// 拖动判定一律以 OnUnitBeginDrag 为准。
+    /// </summary>
     public void OnUnitPointerDown(FieldUnit unit, PointerEventData eventData)
     {
         if (!allowActions || unit == null) return;
@@ -309,20 +308,28 @@ public class UnitActionController : MonoBehaviour
     public void OnUnitBeginDrag(FieldUnit unit, PointerEventData eventData)
     {
         if (!allowActions) return;
+        if (unit == null || !IsUsable(unit)) return;
 
-        if (pressedUnit == null || unit == null || unit != pressedUnit || !IsUsable(unit))
-        { CancelDrag(); return; }
+        // 只接管我方兵牌(敌方单位、建筑都不可拖)
+        if (unit.Side != BattleSide.Player || !unit.IsUnit) return;
 
-        float moved = eventData != null ? Vector2.Distance(eventData.position, pressPosition) : dragThreshold;
-        if (moved < dragThreshold) { CancelDrag(); return; }
+        // "位移够不够判定成拖动"用**拖动开始这一刻**的指针位置算,不再依赖 PointerDown 记下的 pressPosition。
+        // 原因:按下事件不一定能到兵牌格子上(卡面自己有个 IPointerDownHandler 时会先接走),
+        // 那条路一旦断,pressPosition 就一直是零值,拖动会被误判成"没动过"而直接取消 —— 表现成"拖不起来"。
+        // 指针已经越过阈值 EventSystem 才会调到这里,所以"够不够拖动"这件事其实已经由它保证了。
+        if (eventData != null && pressPosition != Vector2.zero)
+        {
+            float moved = Vector2.Distance(eventData.position, pressPosition);
+            if (moved < dragThreshold) { pressedUnit = null; return; }
+        }
 
+        pressedUnit = unit;
         dragUnit = unit;
         selected = unit;                       // 拖动中保持选中,松手后还看得见金框
         MoveHighlight(unit);
         RefreshTargetFrames(unit);             // 红框一直留着:拖到敌人身上就是打它
         ShowDragMarker(unit);
         HighlightMoveTargets(unit);
-        RefreshInfo();
 
         if (debugLog) Debug.Log($"[操作] 开始拖动「{unit.DisplayName}」");
     }
@@ -340,8 +347,9 @@ public class UnitActionController : MonoBehaviour
 
         MoveDragMarker(eventData.position);
 
-        // 指针底下是不是一个"现在打得到"的敌人?
-        var target = AttackTargetUnderPointer(dragUnit, eventData.position);
+        // 指针底下是不是一个"现在打得到"的敌人?(排只取一次射线,给攻击判定和落点高亮共用)
+        var hoverRow = PickRowUnderPointer(eventData.position);
+        var target = AttackTargetUnderPointer(dragUnit, eventData.position, hoverRow);
         if (target != hoveredTarget)
         {
             SetTargetFrameEmphasis(hoveredTarget, false);
@@ -354,11 +362,11 @@ public class UnitActionController : MonoBehaviour
             // 攻击优先:指针在敌人身上时不再给排上色,免得看不出来这一下会打谁
             RestoreRowHighlight(hoveredRow);
             hoveredRow = null;
-            SetInfo($"松手攻击「{hoveredTarget.DisplayName}」");
+            ShowTip($"松手攻击「{hoveredTarget.DisplayName}」");
             return;
         }
 
-        var row = PickRowUnderPointer(eventData.position);
+        var row = hoverRow;
         if (row != hoveredRow)
         {
             RestoreRowHighlight(hoveredRow);
@@ -382,15 +390,14 @@ public class UnitActionController : MonoBehaviour
         pressedUnit = null;
 
         if (acting == null) return;
-        if (!IsUsable(acting)) { SetInfo("这个单位已经不在场上了"); RefreshInfo(); return; }
+        if (!IsUsable(acting)) { ShowTip("这个单位已经不在场上了"); return; }
 
         // ---- 结局一:落在敌人身上 → 攻击 ----
         if (target != null) { TryAttack(acting, target); return; }
 
         if (row == null)
         {
-            SetInfo("松手的位置不在任何一条排上，没有移动");
-            RefreshInfo();
+            ShowTip("松手的位置不在任何一条排上，没有移动");
             return;
         }
 
@@ -408,8 +415,7 @@ public class UnitActionController : MonoBehaviour
                 row.FlashInvalid();
                 FloatingTipUI.Show(ScreenPositionOf(acting), why ?? "不能移到这条排", warning: true);
             }
-            SetInfo(sameRow ? $"「{acting.DisplayName}」已经在这条排上" : why ?? "不能移到这条排");
-            RefreshInfo();
+            ShowTip(sameRow ? $"「{acting.DisplayName}」已经在这条排上" : why ?? "不能移到这条排");
             return;
         }
 
@@ -419,16 +425,71 @@ public class UnitActionController : MonoBehaviour
     /// <summary>
     /// 指针底下那个"拖动中的单位现在打得到"的敌人(用红框状态判,和界面上看到的完全一致)。
     /// 找不到返回 null —— 那就说明这一下不是攻击,该按移动处理。
+    ///
+    /// ⚠ 直接射线没命中具体某张卡时,还要**按排补判一次**(见下面那个重载)。
+    ///   满员的排里卡是紧挨着挤满的,两张卡之间只剩一条很窄的缝;指针落在缝里、
+    ///   或者落在卡与格子的边缘上时,射线打不到任何 FieldUnit,于是这一下被当成"移动",
+    ///   接着被"目标排已满"拒掉 —— 表现就是"敌人那排满了就打不到它"。
+    ///   攻击判定的单位是**敌方排**,不是"指针必须严丝合缝压在某张卡上"。
     /// </summary>
     private FieldUnit AttackTargetUnderPointer(FieldUnit attacker, Vector2 screenPosition)
+        => AttackTargetUnderPointer(attacker, screenPosition, PickRowUnderPointer(screenPosition));
+
+    private FieldUnit AttackTargetUnderPointer(FieldUnit attacker, Vector2 screenPosition, BattleRow pointerRow)
     {
         if (!IsUsable(attacker)) return null;
 
         var unit = PickUnitUnderPointer(screenPosition);
-        if (unit == null || unit.Side == attacker.Side || !unit.IsAlive) return null;
-        if (!BattleRules.CanAttack(attacker, unit, out _)) return null;
+        if (unit != null)
+            return unit.Side != attacker.Side && unit.IsAlive && BattleRules.CanAttack(attacker, unit, out _)
+                ? unit
+                : null;
 
-        return unit;
+        // 补判:指针确实压在这条排上,只是没严丝合缝压在某张卡上(卡与卡之间的缝就是这种)。
+        // **只认指针所在的这一条排** —— 不跨排找替身,否则"拖到敌方后军"会突然打到中军的某个单位,
+        // 打谁完全猜不到,比打不着更糟。
+        return NearestAttackableIn(attacker, pointerRow, screenPosition);
+    }
+
+    /// <summary>
+    /// 这条排上"离指针最近的那个能打的敌人"。卡与卡之间的缝会走到这里 ——
+    /// 挑离指针最近的一个是**确定**的,不会出现"点这一下打到了旁边那张"的随机感。
+    /// 一条排上没有一个能打的(空排、守护挡着、射程不够)就返回 null,那一格仍然按移动处理。
+    /// </summary>
+    private static FieldUnit NearestAttackableIn(FieldUnit attacker, BattleRow row, Vector2 screenPosition)
+    {
+        if (row == null || !IsUsable(attacker)) return null;
+
+        FieldUnit best = null;
+        float bestDistance = float.MaxValue;
+
+        var units = row.Units;      // 直接用排自己的成员表:不额外分配、顺序就是链上的顺序
+        for (int i = 0; i < units.Count; i++)
+        {
+            var candidate = units[i];
+            if (candidate == null || !candidate.IsAlive) continue;
+            if (candidate.Side == attacker.Side) continue;
+            if (!BattleRules.CanAttack(attacker, candidate, out _)) continue;
+
+            float distance = Vector2.Distance(ScreenPosition2DOf(candidate), screenPosition);
+            if (distance < bestDistance) { bestDistance = distance; best = candidate; }
+        }
+
+        return best;
+    }
+
+    /// <summary>取单位的屏幕坐标(二维,用来比"离指针多远")。拿不到就返回屏幕外,让它排到最后</summary>
+    private static Vector2 ScreenPosition2DOf(FieldUnit unit)
+    {
+        var rect = RectOf(unit);
+        if (rect == null) return new Vector2(-9999f, -9999f);
+
+        var canvas = rect.GetComponentInParent<Canvas>();
+        var camera = canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay
+            ? null
+            : canvas.worldCamera;
+
+        return RectTransformUtility.WorldToScreenPoint(camera, rect.position);
     }
 
     /// <summary>把单位挪到这条排(和数字键走同一条 MoveUnit)</summary>
@@ -451,8 +512,7 @@ public class UnitActionController : MonoBehaviour
         {
             row.FlashInvalid();
             FloatingTipUI.Show(ScreenPositionOf(unit), message, warning: true);
-            SetInfo(message);
-            RefreshInfo();
+            ShowTip(message);
             return;
         }
 
@@ -611,13 +671,13 @@ public class UnitActionController : MonoBehaviour
 
         if (target.Row == null)
         {
-            SetInfo("目标不在任何一条排上");
+            ShowTip("目标不在任何一条排上");
             return;
         }
 
         if (!BattleRules.CanAttack(attacker, target, out string reason))
         {
-            SetInfo(reason);
+            ShowTip(reason);
             FloatingTipUI.Show(ScreenPositionOf(target), reason, warning: true);
             target.Row.FlashInvalid();
             return;
@@ -625,7 +685,7 @@ public class UnitActionController : MonoBehaviour
 
         if (!board.AttackUnit(attacker, target, out string message))
         {
-            SetInfo(message);
+            ShowTip(message);
             FloatingTipUI.Show(ScreenPositionOf(target), message, warning: true);
             return;
         }
@@ -636,7 +696,7 @@ public class UnitActionController : MonoBehaviour
     /// <summary>单位行动之后:AP 用完就自动取消选中,否则保持选中(连战 / 骑兵能连着走两步)</summary>
     private void AfterAction()
     {
-        if (selected == null) { RefreshInfo(); return; }
+        if (selected == null) return;
 
         // 攻击/反击可能把选中的自己打死了:必须清掉选中,否则后面每帧都在碰已销毁的对象
         if (!IsUsable(selected))
@@ -653,7 +713,6 @@ public class UnitActionController : MonoBehaviour
 
         // 还有 AP:位置/血量都变了,可攻击目标要重算
         RefreshTargetFrames(selected);
-        RefreshInfo();
     }
 
     // ================================================================ 键盘快捷移动(拖动之外的等价入口)
@@ -676,7 +735,7 @@ public class UnitActionController : MonoBehaviour
 
         if (!board.MoveUnit(selected, type, out string message))
         {
-            SetInfo(message);
+            ShowTip(message);
             // 「已经在这条排上」只是原地没动,不该飘红警告
             if (selected.Row == null || selected.Row.RowType != type)
                 FloatingTipUI.Show(ScreenPositionOf(selected), message, warning: true);
@@ -870,59 +929,23 @@ public class UnitActionController : MonoBehaviour
                              SpriteMeshType.FullRect, new Vector4(border, border, border, border));
     }
 
-    private void RefreshInfo()
+    /// <summary>
+    /// 冒一句飘字(原来这里是一条常驻在屏幕底部、横跨 1400 像素的说明条)。
+    ///
+    /// 【为什么改掉常驻条】它建在画布底边居中,正好压在手牌区上,把卡牌挡住了;
+    ///   而且没选中单位时它显示一长串操作教程,战斗里一直在那儿占着地方。
+    ///   改成飘字之后:说完就散,不占版面,也和项目里其它反馈(见 FloatingTipUI 的说明、
+    ///   以及本文件里已有的那些 FloatingTipUI.Show 调用)口径一致 —— 策划案§10.3 本来
+    ///   就要求"变灰 / 抖动 / 飘字",不许用常驻弹窗打断操作。
+    ///
+    /// position 留空 = 用鼠标当前位置(指针操作触发的反馈基本都在指针那儿)。
+    /// </summary>
+    private static void ShowTip(string message, Vector2? position = null)
     {
-        if (selected == null || !selected.IsAlive)
-        {
-            SetInfo(allowActions
-                ? "拖动我方兵牌：落到一条排上 = 移动（绿的可落、红的不可），落到套红框的敌人身上 = 攻击 ｜ 点一下 = 选中查看 ｜ Esc = 取消"
-                : "");
-            return;
-        }
-
-        string hint = DescribeActions(selected);
-        SetInfo($"已选中「{selected.DisplayName}」 {selected.Atk}/{selected.Hp} · 行动 {selected.Ap}/{selected.ApMax} · {hint}");
+        if (string.IsNullOrEmpty(message)) return;
+        FloatingTipUI.Show(position ?? (Vector2)Input.mousePosition, message);
     }
 
-    private static string DescribeActions(FieldUnit unit)
-    {
-        if (unit.Ap <= 0) return "行动力已耗尽（每回合开始补满）";
-        if (unit.SuppressTurns > 0) return $"被压制 {unit.SuppressTurns} 回合";
-        if (unit.DeployedThisTurn && !BattleRules.HasKeyword(unit.Data, Keyword.Blitz)) return "刚部署，本回合不能行动（带「闪击」的除外）";
-
-        var parts = new List<string>();
-        int range = BattleRules.RangeOf(unit);
-        parts.Add(unit.IsRaiding
-            ? $"袭扰中：只能打敌方后军建筑（射程 {range}）"
-            : $"可打 {range} 排内的敌方目标（红的才能打）");
-        parts.Add(unit.IsRaiding ? "拖动到前军 = 撤回" : "拖动到相邻前方的排 = 移动");
-        parts.Add("每次行动扣 1 AP + 行动费用 CP");
-
-        return string.Join("，", parts);
-    }
-
-    private void SetInfo(string text)
-    {
-        if (string.IsNullOrEmpty(text)) { if (infoText != null) infoText.text = ""; return; }
-
-        if (infoText == null)
-        {
-            var canvas = CanvasUtil.FindRootCanvas();
-            if (canvas == null) return;
-
-            infoText = RuntimeText.Create((RectTransform)canvas.transform, "UnitActionInfo", text, infoFontSize,
-                                          TMPro.TextAlignmentOptions.Center,
-                                          new Color(0.98f, 0.95f, 0.82f));
-
-            var rt = (RectTransform)infoText.transform;
-            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0f);
-            rt.pivot = new Vector2(0.5f, 0f);
-            rt.sizeDelta = new Vector2(1400f, 60f);
-            rt.anchoredPosition = new Vector2(0f, infoBottomOffset);
-        }
-
-        infoText.text = text;
-    }
 
     private static Vector3 ScreenCenterOf(Vector3 worldPosition)
     {

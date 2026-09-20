@@ -205,6 +205,10 @@ public class CardDisplay : MonoBehaviour
             if (i > 0) sb.Append("，");
             sb.Append(KeywordToChinese(data.keywords[i]));
         }
+
+        // 注意:这里**不做去重**。keywords 里出现重复项在本项目是合法数据 ——
+        // 重甲的层数就是靠重复次数编码的(重甲1 = HeavyArmor 一项,重甲2 = 两项,依此类推),
+        // 见 BattleRules.KeywordCount / HeavyArmorLayers。卡面该照着数据原样显示。
         keywordsText.text = sb.ToString();
     }
 

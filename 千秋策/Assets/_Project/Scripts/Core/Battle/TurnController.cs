@@ -103,6 +103,21 @@ public class TurnController : MonoBehaviour
     public Side CurrentSide => currentSide;
     public bool IsLocalTurn => currentSide == Side.Local;
     public bool HasStarted => started;
+
+    /// <summary>本局先手方。StartFirstTurn / DecideFirstSide 之前无意义(默认 Local)</summary>
+    public Side FirstSide { get; private set; } = Side.Local;
+
+    /// <summary>
+    /// 先手定下来了(附带由谁先手)。
+    ///
+    /// 为什么是**静态**事件而不是普通实例事件:订阅方(先手提示界面 BattleIntroUI.OnEnable)订阅的
+    /// 那一刻,TurnController.Instance 可能还没建起来(它俩都在场景加载时创建,顺序不保证),
+    /// 订阅不能依赖 Instance。静态事件绕开这个时序问题,也免去"谁先建谁后建"的纠结。
+    /// </summary>
+    public static event Action<Side> FirstSideDecided;
+
+    /// <summary>第 1 回合是不是已经真的开起来了(先手提示界面用它避免重复开局)</summary>
+    public bool TurnInProgress { get; private set; }
     public int RoundNumber => roundNumber;
     public int LocalTurnNumber => localTurns;
     public int EnemyTurnNumber => enemyTurns;
@@ -141,19 +156,43 @@ public class TurnController : MonoBehaviour
         StartFirstTurn();
     }
 
-    /// <summary>开局:进入先手方的第 1 回合</summary>
+    /// <summary>开局:定下先手,然后进入先手方的第 1 回合</summary>
     public void StartFirstTurn()
     {
         if (started) return;
         started = true;
         roundNumber = 1;
 
-        Side actualFirst = firstSide;
-        if(firstSide == Side.Random)
-        {
-            actualFirst = UnityEngine.Random.Range(0,2) == 0 ? Side.Local : Side.Enemy;
-        }
-        StartSideTurn(actualFirst);
+        DecideFirstSide();
+        StartSideTurn(FirstSide);
+    }
+
+    /// <summary>
+    /// 只把先手方摇出来,不开始回合 —— 给"先手提示"界面用。
+    /// 随机的那个结果原来是个局部变量、用完就没了,外面想知道谁先手只能再摇一次(那就会摇出两个答案),
+    /// 所以这里把它落进 <see cref="FirstSide"/> 并广播出去。
+    /// </summary>
+    public void DecideFirstSide()
+    {
+        FirstSide = firstSide == Side.Random
+            ? (UnityEngine.Random.Range(0, 2) == 0 ? Side.Local : Side.Enemy)
+            : firstSide;
+
+        Debug.Log($"[Turn] 先手是{(FirstSide == Side.Local ? "我方" : "敌方")}" +
+                  $"{(firstSide == Side.Random ? "(随机)" : "(场景里固定)")}");
+
+        FirstSideDecided?.Invoke(FirstSide);
+    }
+
+    /// <summary>
+    /// 直接开始第 1 回合,不碰先手(先手已经由 DecideFirstSide 定过了)。
+    /// 先手提示界面点掉之后调这个来真正开局 —— 这样"提示"和"回合"分成两步,
+    /// 提示还挂在屏幕上时回合不会偷偷跑起来。
+    /// </summary>
+    public void BeginTurnWithDecidedFirstSide()
+    {
+        if (!started || TurnInProgress) return;
+        StartSideTurn(FirstSide);
     }
 
     /// <summary>
@@ -203,6 +242,7 @@ public class TurnController : MonoBehaviour
             Debug.LogError("[Turn] StartSideTurn 不能接收 Random，请先在 StartFirstTurn 解析先手胜方！");
             return;
         }
+        TurnInProgress = true;      // 先手提示界面靠它判断"已经开起来了,别再开一次"
         currentSide = side;
         int sideTurn = side == Side.Local ? ++localTurns : ++enemyTurns;
 

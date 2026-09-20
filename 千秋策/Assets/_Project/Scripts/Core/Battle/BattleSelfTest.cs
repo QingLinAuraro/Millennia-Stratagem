@@ -367,22 +367,27 @@ public class BattleSelfTest : MonoBehaviour
                 // 这是射程/攻击方向的唯一真相源,一行一行写出来,别再让"视角"混进算术。
                 // 纵轴 = 攻击者所在排,横轴 = 目标所在排;数值 = ForwardDistance(排距)。
                 // 负数即"在身后,打不到"。正数 = 要隔几排(近战射程 1 只能吃 +1,远程射程 2 能吃 +1/+2)。
+                //
+                // ⚠ 共享前军那两格是**两个不同单位**在站:第 3 行是"我方单位站共享前军",
+                //   第 3 列是"敌方单位站共享前军"。行/列的 side 指的是**站在那条排上的单位的阵营**,
+                //   不是排自己的 Side —— 那条排是全场唯一的物理物体,row.Side 恒为 Player,
+                //   照 row.Side 去填就会把敌人当成我方前军,这正是排距算错、敌人从桥上够到大营的老根。
                 {
                     var rowOf = new System.Func<BattleSide, BattleRowType, BattleRow>((s, t) =>
-                        s == BattleSide.Player
-                            ? (t == BattleRowType.Back ? board.PlayerBack
-                               : t == BattleRowType.Mid ? board.PlayerMid : board.PlayerFront)
-                            : (t == BattleRowType.Back ? board.EnemyBack
-                               : t == BattleRowType.Mid ? board.EnemyMid : board.PlayerFront));
+                        t == BattleRowType.Front
+                            ? board.PlayerFront                     // 共享前军:不分敌我,都是这一条
+                            : s == BattleSide.Player
+                                ? (t == BattleRowType.Back ? board.PlayerBack : board.PlayerMid)
+                                : (t == BattleRowType.Back ? board.EnemyBack : board.EnemyMid));
 
                     int[,] expected =
                     {
-                        // 目标:  敌方后军 敌方中军 共享前军 我方中军 我方后军
+                        // 目标:  敌方后军 敌方中军 共享前军(敌) 我方中军 我方后军
                         {         0,        1,       2,       3,       4 },   // 攻击者 = 我方后军
                         {        -1,        0,       1,       2,       3 },   // 攻击者 = 我方中军
-                        {        -2,       -1,       0,       1,       2 },   // 攻击者 = 共享前军(我方单位站上面)
-                        {        -3,       -2,      -1,       0,       1 },   // 攻击者 = 敌方中军
-                        {        -4,       -3,      -2,      -1,       0 },   // 攻击者 = 敌方后军
+                        {        -2,       -1,       0,       1,       2 },   // 攻击者 = 我方单位站共享前军
+                        {        -3,       -2,       1,       0,       1 },   // 攻击者 = 敌方中军
+                        {        -4,       -3,       2,       1,       0 },   // 攻击者 = 敌方后军
                     };
 
                     var attackerRows = new[]
@@ -394,7 +399,7 @@ public class BattleSelfTest : MonoBehaviour
                     var targetRows = new[]
                     {
                         (BattleSide.Enemy, BattleRowType.Back), (BattleSide.Enemy, BattleRowType.Mid),
-                        (BattleSide.Player, BattleRowType.Front), (BattleSide.Player, BattleRowType.Mid),
+                        (BattleSide.Enemy, BattleRowType.Front), (BattleSide.Player, BattleRowType.Mid),
                         (BattleSide.Player, BattleRowType.Back),
                     };
 
@@ -403,29 +408,61 @@ public class BattleSelfTest : MonoBehaviour
                     {
                         for (int j = 0; j < targetRows.Length; j++)
                         {
-                            int got = BattleRules.ForwardDistance(rowOf(attackerRows[i].Item1, attackerRows[i].Item2),
+                            int got = BattleRules.ForwardDistance(attackerRows[i].Item1,
+                                                                  rowOf(attackerRows[i].Item1, attackerRows[i].Item2),
                                                                   rowOf(targetRows[j].Item1, targetRows[j].Item2));
                             if (got != expected[i, j])
                             {
                                 if (wrong.Length > 0) wrong.Append("、");
-                                wrong.Append($"[{attackerRows[i].Item2}→{targetRows[j].Item2}] 应为 {expected[i, j]} 实为 {got}");
+                                wrong.Append($"[{BattleRules.SideName(attackerRows[i].Item1)}{attackerRows[i].Item2}" +
+                                             $"→{BattleRules.SideName(targetRows[j].Item1)}{targetRows[j].Item2}]" +
+                                             $" 应为 {expected[i, j]} 实为 {got}");
                             }
                         }
                     }
 
                     Check(wrong.Length == 0,
-                          "排距矩阵 25 格全对（双方视角对称,前军对两边都是前方相邻排）",
+                          "排距矩阵 25 格全对（共享前军按站在上面的单位算,对双方都是前方相邻排）",
                           wrong.ToString());
                 }
 
-                int enemyToFront = BattleRules.ForwardDistance(board.EnemyMid, board.PlayerFront);
+                int enemyToFront = BattleRules.ForwardDistance(BattleSide.Enemy, board.EnemyMid, board.PlayerFront);
                 Check(enemyToFront == 1,
                       "敌方中军 → 共享前军 的排距是 +1（前军在前方,不能是负数）",
                       $"算出 {enemyToFront} —— 负数意味着敌方永远打不到前军,前军就成了一堵单向的墙");
 
-                int playerToFront = BattleRules.ForwardDistance(board.PlayerMid, board.PlayerFront);
+                int playerFromFrontToEnemyMid = BattleRules.ForwardDistance(BattleSide.Player, board.PlayerFront, board.EnemyMid);
+                Check(playerFromFrontToEnemyMid == 1,
+                      "我方单位站共享前军 → 敌方中军 的排距是 +1（按站在桥上的单位自己那方算,不是照排的 Side）",
+                      $"算出 {playerFromFrontToEnemyMid} —— 照排的 Side 取号会算成 -1,桥上的人反而打不到对面中军");
+
+                int enemyMidToMyMid = BattleRules.ForwardDistance(BattleSide.Enemy, board.EnemyMid, board.PlayerMid);
+                Check(enemyMidToMyMid == 0,
+                      "敌方中军 → 我方中军 的排距是 0（两条中军同档,中间隔着一整条前军）",
+                      $"算出 {enemyMidToMyMid} —— 算成 1 的话敌人站在自己中军就能直接够到我方中军和大营");
+
+                int playerToFront = BattleRules.ForwardDistance(BattleSide.Player, board.PlayerMid, board.PlayerFront);
                 Check(playerToFront == 1, "我方中军 → 共享前军 的排距也是 +1（两边对称）",
                       $"算出 {playerToFront}");
+
+                // ---- 共享前军的"视角"回归(排距算错会让敌人隔着一条前军就打到大营) ----
+                // 那条排是全场唯一的物理物体、row.Side 恒为 Player。排距必须按**站在上面的单位**的阵营算;
+                // 一旦照 row.Side 算,敌方单位站上去时它的排号会被读成我方前军的号(2),
+                // 于是"敌方中军 → 我方中军"被算成 1,近战隔着前军就能拆大营。
+                {
+                    var enemyOnBridge = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.PlayerFront, BattleSide.Enemy, 0);
+                    var myCamp = BattleSettlement.FindCamp(BattleSide.Player);
+                    if (enemyOnBridge != null && myCamp != null)
+                    {
+                        bool canHitCamp = BattleRules.CanAttack(enemyOnBridge, myCamp, out string why);
+                        Check(canHitCamp,
+                              "敌方单位站上共享前军后能打到我方大营（桥头被占=大营暴露）",
+                              $"打不到:{why ?? "无理由"}");
+
+                        if (enemyOnBridge.Row != null) enemyOnBridge.Row.RemoveUnit(enemyOnBridge);
+                        Destroy(enemyOnBridge.gameObject);
+                    }
+                }
 
                 // 前军上的近战必须能打到对面中军里的东西(这是"守住前军"的意义所在)
                 var frontBlocker = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.PlayerFront, BattleSide.Player, 0);

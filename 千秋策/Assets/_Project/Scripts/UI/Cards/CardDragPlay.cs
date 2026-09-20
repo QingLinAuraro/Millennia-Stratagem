@@ -68,6 +68,14 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
     private CardHover hover;
     private BattlefieldManager battlefield;
     private CommandPointController commandPoints;
+    private bool hooked;                 // CP / 战场两个订阅都挂上了(见 HookBattle)
+
+    /// <summary>
+    /// 最多重试多少帧去找那两个组件。防的是"主菜单里几十张预览卡每帧都 FindObjectOfType"
+    /// 这种白费功夫 —— 战斗里正常一两帧内就挂上了,用不到这么多。
+    /// </summary>
+    private const int MaxHookAttempts = 120;
+    private int hookAttempts;
 
     private Vector2 grabOffset;          // 抓取点相对卡牌轴心的偏移,拖动时保持手感
     private Vector2 homePosition;        // 扇形里的家(拖回来用)
@@ -89,19 +97,71 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
 
     private void OnEnable()
     {
-        commandPoints = CommandPointController.Instance;
-        battlefield = BattlefieldManager.Instance;
+        HookBattle();
+    }
 
-        if (commandPoints != null) commandPoints.CpChanged += OnCommandPointsChanged;
-        if (battlefield != null) battlefield.BoardChanged += RefreshPlayable;
+    /// <summary>
+    /// 订阅 CP / 战场的变化。**只用 TryGetInstance,不用 Instance** ——
+    /// Instance 是"没有就现建",而这个组件挂在 Card.prefab 上,卡面预制体不只战斗用:
+    /// 卡组构筑界面要在卡池里 Instantiate 48 张卡做预览,任何一次 OnEnable 摸到 Instance,
+    /// 都会在主菜单场景里凭空长出 BattlefieldManager / CommandPointController,
+    /// 然后一路刷"找不到排 PlayerBack""建筑大营摆不上",还会把开局抽卡跑一遍。
+    ///
+    /// 【为什么要等】战斗场景里 HandUI.Awake → CardHoverPreview 会先建一张预览卡,
+    /// 那一刻 BattlefieldManager 可能还没 Awake;而 CardHoverPreview 把预览卡的
+    /// drag.enabled 关掉是**在 OnEnable 之后**才做的。所以这里不在 OnEnable 里一次性定死,
+    /// 拿不到就交给 Update 每帧补一次 —— 订阅一旦成功就不再重试。
+    /// </summary>
+    private void HookBattle()
+    {
+        if (hooked) return;
 
-        RefreshPlayable();
+        // 两个订阅各记各的:只找到一个也要把那个先订上,免得又白等一轮
+        if (commandPoints == null)
+        {
+            commandPoints = CommandPointController.TryGetInstance;
+            if (commandPoints != null) commandPoints.CpChanged += OnCommandPointsChanged;
+        }
+        if (battlefield == null)
+        {
+            battlefield = BattlefieldManager.TryGetInstance;
+            if (battlefield != null) battlefield.BoardChanged += RefreshPlayable;
+        }
+
+        if (commandPoints != null && battlefield != null)
+        {
+            hooked = true;
+            RefreshPlayable();
+            return;
+        }
+
+        // 还没凑齐 —— 过几帧再试。主菜单里那些预览卡会一直凑不齐(那里本来就没有战场),
+        // 所以给个次数上限,不能永远每帧 FindObjectOfType。
+        hookAttempts++;
+        if (hookAttempts <= MaxHookAttempts) return;
+
+        Debug.LogWarning($"[CardDragPlay] 等了 {MaxHookAttempts} 帧还是凑不齐:" +
+                         $"CommandPointController={(commandPoints != null ? "有" : "缺")}, " +
+                         $"BattlefieldManager={(battlefield != null ? "有" : "缺")}。" +
+                         "这张牌「出不出得了」的状态不会自动刷新。" +
+                         "如果这是在战斗场景里,说明缺的那个核心组件没装上。", this);
+    }
+
+    private void Update()
+    {
+        if (!hooked) HookBattle();
     }
 
     private void OnDisable()
     {
         if (commandPoints != null) commandPoints.CpChanged -= OnCommandPointsChanged;
         if (battlefield != null) battlefield.BoardChanged -= RefreshPlayable;
+
+        // 退订了就把 hooked 放开,重新启用时再挂一次(不然第二次 OnEnable 会因为 hooked 还挂着而跳过)
+        hooked = false;
+        hookAttempts = 0;
+        commandPoints = null;
+        battlefield = null;
 
         if (IsDragging) ReleaseDragState();
     }

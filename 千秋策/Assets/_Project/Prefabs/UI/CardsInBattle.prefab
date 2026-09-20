@@ -711,7 +711,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   previewDelay: 0.5
-  fieldPreviewDelay: 0.25
+  fieldPreviewDelay: 0.8
   previewOffset: 12
 --- !u!1 &4687108030249906201
 GameObject:

@@ -2,8 +2,12 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 
 /// <summary>
-/// 卡牌悬停:鼠标在同一张牌上停留超过 previewDelay 秒(默认 0.5 秒),就把这张牌按手牌布局
+/// 卡牌悬停:鼠标在同一张牌上停留超过 previewDelay 秒(默认 1 秒),就把这张牌按手牌布局
 /// 放大成 300x400 弹在 CardHoverPreview 上,同时让 FanLayout 把手牌里这张标出来(默认把其余手牌压暗)。
+///
+/// ⚠ 悬停预览**必须让位给拖动**:指针一按下(OnPointerDown)就立刻清计时并收起已弹出的预览,
+///   按住期间一律不弹,松手后重新数。这是"看卡"和"拖卡"共用同一个左键时的唯一分界 ——
+///   少了这一步,按下想拖牌却先弹出一张大预览挡在落点上,拖动会被预览抢走视线。
 ///
 /// 预览弹在哪儿由**本组件算好中点再交给 CardHoverPreview**:
 ///   · 手牌:弹在这张牌的**正上方**(下沿离卡牌顶边 previewOffset 像素,水平方向对齐卡牌中点)。
@@ -32,23 +36,25 @@ using UnityEngine.EventSystems;
 ///     fan 为 null → 预览照弹,只是手牌不压暗/不隐藏(战场卡就是没有fan的正常情况);
 ///     CardHoverPreview.Instance 为 null → 警告一次「场景里没有 CardHoverPreview」,预览不显示。
 ///   常调:
-///     · previewDelay:手牌停留几秒才弹预览(Card.prefab 上被覆盖成 0.5)。
-///       调小 = 更容易触发(0.1 左右几乎一碰就弹,鼠标扫过手牌会一直闪预览);调大 = 更像「刻意查看」,
-///       但太长(>5 秒)会被当成没反应。计时走 unscaledTime,和 Time.timeScale 无关。
-///     · fieldPreviewDelay:战场卡的停留秒数(CardsInBattle 上被覆盖成 0.25)。
-///       战场摆着一排卡,鼠标经常只是路过,这一档建议比手牌更短(扫过就出,不用刻意停),
-///       但别调到 0 —— 那会让鼠标划过整排卡时预览狂闪。
+///     · previewDelay:手牌停留几秒才弹预览(脚本默认 1;Card.prefab 上是**旧值 0.5,要在 Inspector 里改成 1**)。
+///       这一档的定位是「刻意查看」,不是「扫过就出」:手牌就那几张,玩家想看清楚时自然会停一下,
+///       所以宁可长一点。调小 = 更容易触发(0.1 左右几乎一碰就弹,鼠标扫过手牌会一直闪预览);
+///       调大 = 更刻意,但太长(>2 秒)会被当成没反应。计时走 unscaledTime,和 Time.timeScale 无关。
+///     · fieldPreviewDelay:战场卡的停留秒数(脚本默认 0.8;CardsInBattle.prefab 上是**旧值 0.25,要改成 0.8**)。
+///       战场摆着一排卡、鼠标经常只是路过,而且战场卡还要拿起来拖动 —— 这一档必须比手牌略短(牌多、
+///       想看得快),但不能短到 0.25:那样鼠标划过整排卡时预览狂闪,按下想拖牌也会先弹一张预览。
+///       0.8 左右是"停下来看"和"路过"的分界;调到 0 会让扫过时闪个不停。
 ///     · previewOffset:预览下沿离卡牌视觉顶边多少像素(手牌 8、战场 12)。
 ///       调大 = 预览离卡更远(不容易看错是哪张);调小甚至负值 = 贴上去,可能盖住卡名。
 ///     · 预览出现在哪儿、多大、淡入多快都不在这里:位置由 CardHoverPreview.PlaceNear 算,尺寸在它身上。
-public class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+public class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler
 {
     [Header("悬停预览")]
     [Tooltip("手牌要在同一张牌上停留多少秒才弹出预览")]
-    [SerializeField] private float previewDelay = 3f;
+    [SerializeField] private float previewDelay = 1f;
 
     [Tooltip("战场卡要在同一张牌上停留多少秒才弹出预览(战场建议比手牌短一点)")]
-    [SerializeField] private float fieldPreviewDelay = 0.25f;
+    [SerializeField] private float fieldPreviewDelay = 0.8f;
 
     [Tooltip("预览下沿离卡牌视觉顶边多少像素")]
     [SerializeField] private float previewOffset = 8f;
@@ -87,6 +93,9 @@ public class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandle
     // 拖动出牌期间抑制预览:牌跟着指针乱跑,这时候弹预览会挡住落点
     private bool suppressed;
 
+    // 指针按在这张牌上(拖动/点击出牌的第一步)。按住期间一律不弹预览
+    private bool pressed;
+
     private void Awake()
     {
         rt = (RectTransform)transform;
@@ -116,7 +125,7 @@ public class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandle
         if (suppressed == value) return;
         suppressed = value;
         if (suppressed) CancelPreview();
-        else hoverTime = 0f;      // 松手后重新数
+        else { pressed = false; hoverTime = 0f; }   // 松手后重新数(还按着的话由 Update 再压回去)
     }
 
     /// <summary>立刻收起已经弹出来的预览</summary>
@@ -142,10 +151,31 @@ public class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandle
         DismissPreview();
     }
 
+    /// <summary>
+    /// 按下的那一刻就说明"这一下是操作这张牌,不是要看它",计时立刻清零并收起已经弹出的预览。
+    /// 只靠 CardDragPlay 的 SetSuppressed 不够 —— 那段要等指针真的移动过阈值、判定成拖动才生效,
+    /// 而"按下还没动"的这段时间正是最容易弹出预览、把拖动挡住的窗口。
+    /// </summary>
+    public void OnPointerDown(PointerEventData e)
+    {
+        pressed = true;
+        hoverTime = 0f;         // 松开后要重新数,不是接着按之前的时间
+        DismissPreview();
+    }
+
     // 计时走 unscaled:游戏暂停/慢放时悬停预览该弹还是弹
     private void Update()
     {
-        if (!IsHovered || IsPreviewing || suppressed) return;
+        // 指针按着就是拖动/点击出牌,不弹预览(在牌上按下的由 OnPointerDown 记,
+        // 拖到牌外面再按的情况靠这里兜底)
+        if (Input.GetMouseButton(0)) pressed = true;
+        else if (pressed)
+        {
+            pressed = false;
+            hoverTime = 0f;     // 松手后重新数:拖动结束不该立刻弹出来挡住落点
+        }
+
+        if (!IsHovered || IsPreviewing || suppressed || pressed) return;
 
         hoverTime += Time.unscaledDeltaTime;
         if (hoverTime < DelayFor(ViewMode)) return;

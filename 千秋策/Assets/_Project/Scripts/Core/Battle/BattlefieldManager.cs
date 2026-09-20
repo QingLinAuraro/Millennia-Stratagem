@@ -86,6 +86,26 @@ public class BattlefieldManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 只取**已经存在**的战场管理器,不存在就返回 null —— **绝不新建**。
+    ///
+    /// 【和 Instance 的区别,以及为什么必须有这个】
+    ///   Instance 是"没有就现建"。表现层(卡牌预制体那种)用它很危险:卡面预制体不只战斗用,
+    ///   卡组构筑界面要在卡池里 Instantiate 48 张卡做预览 —— 那 48 次 OnEnable 里任何一次
+    ///   摸到 Instance,都会在**主菜单场景**里凭空长出一个 BattlefieldManager,然后一路刷
+    ///   "找不到排 PlayerBack""建筑大营摆不上",甚至把开局抽卡也跑一遍。
+    ///   所以"看一眼,有就订阅,没有就算了"的场合一律用这个。
+    /// </summary>
+    public static BattlefieldManager TryGetInstance
+    {
+        get
+        {
+            if (instance != null) return instance;
+            instance = FindObjectOfType<BattlefieldManager>();
+            return instance;
+        }
+    }
+
     [Header("排(留空则运行时按名字找)")]
     [Tooltip("己方后军这条排。留空 → 按场景物体名 PlayerBack 自动找;场景里没有就 LogError,这条排落不了牌")]
     [SerializeField] internal BattleRow playerBack;

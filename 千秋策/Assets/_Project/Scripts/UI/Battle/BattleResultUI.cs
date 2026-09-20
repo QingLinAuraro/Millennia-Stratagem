@@ -63,9 +63,18 @@ public class BattleResultUI : MonoBehaviour
 
     private void Awake() => instance = this;
 
-    private void OnEnable() => BattleSettlement.MatchEnded += OnMatchEnded;
+    private void OnEnable()
+    {
+        BattleSettlement.MatchEnded += OnMatchEnded;
+        Debug.Log($"[结算UI][诊断] OnEnable:已订阅 MatchEnded,本组件在「{gameObject.name}」(activeInHierarchy={gameObject.activeInHierarchy})");
+    }
 
-    private void OnDisable() => BattleSettlement.MatchEnded -= OnMatchEnded;
+    private void OnDisable()
+    {
+        BattleSettlement.MatchEnded -= OnMatchEnded;
+        Debug.LogWarning($"[结算UI][诊断] OnDisable:退订了 MatchEnded(本组件在「{gameObject.name}」)。" +
+                         "如果是被隐藏/禁用,结算就不会弹!");
+    }
 
     private void OnDestroy()
     {
@@ -74,6 +83,7 @@ public class BattleResultUI : MonoBehaviour
 
     private void OnMatchEnded(BattleSide winner, string reason)
     {
+        Debug.Log($"[结算UI][诊断] 收到 MatchEnded:winner={winner},shown={shown}");
         if (shown) return;
 
         shown = true;

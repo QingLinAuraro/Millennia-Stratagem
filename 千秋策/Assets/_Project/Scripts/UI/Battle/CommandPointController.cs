@@ -73,6 +73,25 @@ public class CommandPointController : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 只取**已经存在**的 CP 控制器,不存在就返回 null —— **绝不新建**。
+    ///
+    /// 为什么需要它:Instance 找不到会现建,而建出来的这份 Awake 里会去 ResolveRefs +
+    /// DrawOpeningHand,于是**在任何场景**里摸一下 Instance 都会触发"开局抽牌"。
+    /// 卡面预制体(Card.prefab)在卡组构筑界面的卡池预览里会被 Instantiate 几十次,
+    /// 每一次 OnEnable 摸一下 Instance,就够把开局抽卡在主菜单里跑一遍。
+    /// 表现层"有就订阅、没有就算了"的场合一律用这个。
+    /// </summary>
+    public static CommandPointController TryGetInstance
+    {
+        get
+        {
+            if (instance != null) return instance;
+            instance = FindObjectOfType<CommandPointController>();
+            return instance;
+        }
+    }
+
     [Header("CP 池(策划案§4.5)")]
     [Tooltip("开局 CP 上限:第 1 回合 = 1")]
     [SerializeField] private int startingCpMax = 1;

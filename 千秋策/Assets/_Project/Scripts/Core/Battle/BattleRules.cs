@@ -258,20 +258,47 @@ public static class BattleRules
     /// 前方排距:目标排在攻击者"前面"几排。负数 = 在身后(不能打)。
     /// 共享前军对双方都是**前方相邻排**(§7.1.1)—— 它在双方视角里都是"第 2 位"。
     ///
-    /// ⚠ 两个排各用各的视角(attacker.Row 用 attacker.Side、target.Row 用 target.Side)。
-    /// 不能拿同一套"绝对编号":那样共享前军(2)会落在敌方中军(3)后面,
-    /// 我方兵站前军时敌方近战就永远打不着了。
+    /// ⚠ <paramref name="attackerSide"/> 必须是**攻击者那个单位自己的阵营**,不能从排上取。
+    /// 共享前军是全场唯一的物理物体,它的 row.Side 恒为 Player —— 敌方单位站上去之后,
+    /// 想从这条排反推"是谁站在上面"是**做不到**的,只能由调用方把单位阵营传进来。
+    /// (踩过的坑:早先这里对攻击者那条排也照 row.Side 取号,于是敌人站在桥上时,
+    ///  我方单位打它算出 +1 看着没问题,而敌人从桥上打我方中军算出 -1「目标在身后」。)
+    ///
+    /// 目标的排号则参照攻击者视角取(见 RankAsSeenFrom):共享前军永远解析成同一条物理排,
+    /// 其余四条排各属一方,视角不同就镜像换算。
     /// </summary>
-    public static int ForwardDistance(BattleRow attacker, BattleRow target)
+    public static int ForwardDistance(BattleSide attackerSide, BattleRow attacker, BattleRow target)
     {
         if (attacker == null || target == null) return -99;
 
-        int a = RowRank(attacker.Side, attacker.RowType);
-        int b = RowRank(target.Side, target.RowType);
+        int a = RowRank(attackerSide, attacker.RowType);
+        int b = RankAsSeenFrom(attackerSide, target);
         if (a < 0 || b < 0) return -99;
 
         return b - a;
     }
+
+    /// <summary>
+    /// 从 <paramref name="view"/> 这一方的视角看,target 是"前面第几排"。
+    /// 共享前军全场唯一,所以它跟谁站在上面无关、直接就是前军那一档(第 2 位);
+    /// 其余四条排属于某一方,视角不同则等价镜像(reflect),排号 = 4 - 原号 ——
+    /// 每方各三档且镜像是自逆的,所以这个换算是精确的,不是估算。
+    /// </summary>
+    private static int RankAsSeenFrom(BattleSide view, BattleRow target)
+    {
+        if (target.RowType == BattleRowType.Front)
+            return RowRank(view, BattleRowType.Front);       // 共享前军:对谁都是第 2 位
+
+        int b = RowRank(target.Side, target.RowType);
+        if (b < 0) return -99;
+        if (target.Side == view) return b;                   // 己方的排:视角一致
+
+        // 对方的排:按同一方的那条链镜像过来(每方三档,镜像就是 4 - 原号)
+        return MirrorRank(b);
+    }
+
+    /// <summary>排号在"这一方 / 对面"两套编号之间互为镜像:0↔4、1↔3、2 不动</summary>
+    private static int MirrorRank(int rank) => 4 - rank;
 
     // ================================================================ 兵种:射程 / 兵种固有值(§2.5 / §2.6)
 
@@ -468,7 +495,7 @@ public static class BattleRules
         if (attacker.IsRaiding && target.Row != null && target.Row.RowType != BattleRowType.Back)
         { reason = "袭扰中的骑兵只能拆敌方后军建筑"; return false; }
 
-        int distance = ForwardDistance(fromRow, target.Row);
+        int distance = ForwardDistance(attacker.Side, fromRow, target.Row);
         if (distance < 0) { reason = "只能攻击前方的目标"; return false; }
 
         int range = RangeOf(attacker);
