@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text;
 using TMPro;
 using UnityEngine;
@@ -39,14 +40,26 @@ public class DeckEditorPanel : MonoBehaviour
     [SerializeField] private CardLibrary library;
 
     [Header("卡池栅格")]
-    [Tooltip("卡池每格尺寸(px)。卡面设计尺寸 150×200,格子留大一点放角标")]
-    [SerializeField] private Vector2 cardCellSize = new Vector2(150f, 200f);
-    [Tooltip("卡池每行几张")]
-    [SerializeField] private int columns = 6;
+    // 格子尺寸是被"效果文本要能读"倒推出来的,不是随便定的:
+    // 48 张卡里最长的效果文案是「盐铁论」41 字,大部分只有 6~10 字。按每行 14 个汉字、
+    // 最多 3 行算,格子内宽至少 210px、文本区高至少 78px,于是定成 300×270。
+    // 再小就会出现"字挤成一条看不清",而看不清的话格子还不如只显示名字。
+    [Tooltip("卡池每格尺寸(px)。要放得下卡名 + 效果文本 + 费用/属性,别低于 260×240")]
+    [SerializeField] private Vector2 cardCellSize = new Vector2(300f, 270f);
+    [Tooltip("卡池每行几张。格子变宽后 4 列刚好铺满左栏")]
+    [SerializeField] private int columns = 4;
     [Tooltip("卡池格间距")]
     [SerializeField] private Vector2 cardCellSpacing = new Vector2(12f, 12f);
-    [Tooltip("卡池卡面缩放(1 = 原始设计尺寸)。格子小于卡面时调小这个")]
+    [Tooltip("卡池卡面缩放。只在 cardPrefab 接了卡面、走「整张卡面」那条老路时才用得上")]
     [SerializeField] private float poolScale = 0.78f;
+
+    [Header("卡池文字")]
+    [Tooltip("卡池格子里卡名的字号")]
+    [SerializeField] private float cellNameFontSize = 21f;
+    [Tooltip("卡池格子里效果文本的字号")]
+    [SerializeField] private float cellEffectFontSize = 15f;
+    [Tooltip("卡池格子里费用/属性的字号")]
+    [SerializeField] private float cellStatFontSize = 15f;
 
     [Header("卡组栏")]
     [Tooltip("卡组栏里每行的高度")]
@@ -242,11 +255,27 @@ public class DeckEditorPanel : MonoBehaviour
         deckContent = BuildScrollList(deckRoot, "DeckScroll", "DeckContent");
 
         // ---- 底栏按钮 ----
-        // 从右往左排:pivot 是 (1, 0.5),anchoredPos.x 是**右边缘**的位置
-        CreateButton(root, "BtnSaveDeck", "保存卡组", new Vector2(-360f, 48f), SaveDeck);
-        CreateButton(root, "BtnSetActive", "设为出战", new Vector2(-540f, 48f), SaveAndSetActive);
-        CreateButton(root, "BtnResetDeck", "重置", new Vector2(-180f, 48f), ResetToPreset);
-        CreateButton(root, "BtnCloseDeck", "返回", new Vector2(-20f, 48f), Close);
+        // 四个按钮交给 HorizontalLayoutGroup 排,不再手算 anchoredPosition。
+        // 原来手算的坐标是(-20/-180/-360/-540, 48),间距 160 而按钮宽 150 —— 只剩 10px 缝,
+        // 看起来就是四个长条挤成一坨。而且 150×56 太扁,中文标签挤在窄横条里很难看。
+        // 现在按钮 150×100(接近正方形),由布局组按固定间距排开。
+        var btnRow = NewRect(root, "ButtonRow",
+                             new Vector2(1f, 0f), new Vector2(1f, 0f),
+                             new Vector2(-900f, 24f), new Vector2(-24f, 140f));
+        var btnLayout = btnRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        btnLayout.childAlignment = TextAnchor.MiddleRight;   // 靠右排,左边留白给状态文字
+        btnLayout.spacing = 14f;
+        btnLayout.padding = new RectOffset(0, 0, 0, 0);
+        btnLayout.childControlWidth = false;                 // 宽度按各自的 sizeDelta,不按内容撑
+        btnLayout.childControlHeight = false;                // 同上(见 BattleRow.cs 里踩过的坑)
+        btnLayout.childForceExpandWidth = false;
+        btnLayout.childForceExpandHeight = false;
+
+        // 顺序按"从右往左"填,和布局组排出来的左右顺序一致:返回在最右,设为出战最左
+        CreateButton(btnRow, "BtnCloseDeck", "返回", new Vector2(150f, 100f), Close);
+        CreateButton(btnRow, "BtnResetDeck", "重置", new Vector2(150f, 100f), ResetToPreset);
+        CreateButton(btnRow, "BtnSaveDeck", "保存卡组", new Vector2(150f, 100f), SaveDeck);
+        CreateButton(btnRow, "BtnSetActive", "设为出战", new Vector2(150f, 100f), SaveAndSetActive);
     }
 
     private RectTransform BuildScrollGrid(RectTransform parent, string scrollName, string contentName,
@@ -515,6 +544,9 @@ public class DeckEditorPanel : MonoBehaviour
 
         if (cardPrefab != null)
         {
+            // 老路:接了卡面预制体就还是整张卡面(插画/排版都现成),但代价是效果文本很小 ——
+            // Card.prefab 里 effectsText 的字号只有 8px,150×200 的卡面缩进格子后基本看不清。
+            // 留着这条路是为了以后想换成"看图鉴式卡面"时不用改代码。
             var view = Instantiate(cardPrefab, cell);
             var viewRect = (RectTransform)view.transform;
             viewRect.anchorMin = viewRect.anchorMax = new Vector2(0.5f, 0.5f);
@@ -525,23 +557,14 @@ public class DeckEditorPanel : MonoBehaviour
             var display = view.GetComponent<CardDisplay>();
             if (display != null) display.Bind(card, CardViewMode.Hand);
 
-            // 卡池里的卡不吃悬停预览(预览会弹出整张卡盖住界面),也不吃拖动
-            var hover = view.GetComponent<CardHover>();
-            if (hover != null) hover.enabled = false;
+            // 卡池里的卡不吃拖动(拖出去没有意义),但**吃悬停预览** ——
+            // 鼠标停 1 秒弹 300×400 大卡,这是玩家看插画和完整卡面的途径。
             var dragPlay = view.GetComponent<CardDragPlay>();
             if (dragPlay != null) dragPlay.enabled = false;
         }
         else
         {
-            // 兜底:没有卡面预制体时用一行文字,至少能用
-            var fallback = RuntimeText.Create(cell, "Fallback",
-                $"{card.cardName}\n{card.deploymentCost} 费  {card.atk}/{card.hp}", 18f,
-                TextAlignmentOptions.Center, textColor);
-            var fbRect = (RectTransform)fallback.transform;
-            fbRect.anchorMin = Vector2.zero;
-            fbRect.anchorMax = Vector2.one;
-            fbRect.offsetMin = Vector2.zero;
-            fbRect.offsetMax = Vector2.zero;
+            CreatePoolCellText(cell, card);
         }
 
         // 角标:已放 N / 上限 M
@@ -565,6 +588,100 @@ public class DeckEditorPanel : MonoBehaviour
         poolCells[card] = cell.gameObject;
         poolBadges[card] = badge;
     }
+
+    /// <summary>
+    /// 在格子里用文字画出这张卡的全部关键信息(不依赖任何预制体)。
+    /// 从上到下:费用 + 卡名 + 兵种 / 效果文本 / 属性行。左侧一条竖色带标稀有度。
+    ///
+    /// 【为什么要有这个方法】
+    ///   Card.prefab 只有 150×200,里面效果文本的字号只有 8px。塞进格子再缩放,
+    ///   效果文本渲染出来只有几个像素高 —— 玩家能看到的就只剩卡名和费用,等于"只能看个名字"。
+    ///   而效果描述恰恰是构筑卡组时最需要看的东西(得知道这牌到底干什么)。
+    ///   所以不走卡面,直接用文字画一格完整的卡牌信息,字号按格子尺寸定,保证真的能读。
+    /// </summary>
+    private void CreatePoolCellText(RectTransform cell, CardData card)
+    {
+        var tint = RarityTint(card.rarity);
+
+        // 左边一条竖色带:不占地方,但一眼能分出稀有度
+        var strip = NewRect(cell, "RarityStrip", new Vector2(0f, 0f), new Vector2(0f, 1f),
+                            Vector2.zero, Vector2.zero);
+        strip.pivot = new Vector2(0f, 0.5f);
+        strip.anchoredPosition = Vector2.zero;
+        strip.sizeDelta = new Vector2(5f, 0f);
+        var stripImage = strip.gameObject.AddComponent<Image>();
+        stripImage.color = tint;
+        // Image 的 raycastTarget 默认是 true —— 不关掉的话这条色带会吃掉射线,
+        // 点它落在格子上的那 5px 就加不了牌。格子上所有装饰性 Image 都要记得关。
+        stripImage.raycastTarget = false;
+
+        // ---- 第一行:费用 + 卡名 + 兵种 ----
+        var cost = RuntimeText.Create(cell, "Cost",
+            card.deploymentCost.ToString(), 22f,
+            TextAlignmentOptions.Center, new Color(0.98f, 0.86f, 0.45f));
+        Place((RectTransform)cost.transform, new Vector2(0f, 1f), new Vector2(0f, 1f),
+              new Vector2(12f, -10f), new Vector2(34f, 32f), new Vector2(0f, 1f));
+
+        // 策略卡显示「策略」,兵牌显示兵种(步兵/骑兵/弓兵/器械)
+        string kind = card.cardType == CardType.Tactic || card.unitType == UnitType.Strategy
+            ? "策略"
+            : card.unitType.GetDescription();
+
+        var name = RuntimeText.Create(cell, "Name",
+            $"{card.cardName}  <size=70%><color=#9A948A>{kind}</color></size>", cellNameFontSize,
+            TextAlignmentOptions.Left, textColor);
+        Place((RectTransform)name.transform, new Vector2(0f, 1f), new Vector2(1f, 1f),
+              new Vector2(52f, -10f), new Vector2(-14f, 36f), new Vector2(0f, 1f));
+        name.overflowMode = TextOverflowModes.Ellipsis;   // 卡名太长就省略,不换行
+
+        // ---- 中间:效果文本 ----
+        // 效果为空的卡(纯身材兵牌)不画这一块,免得留一片空白
+        if (!string.IsNullOrEmpty(card.effectText))
+        {
+            var effect = RuntimeText.Create(cell, "Effect", card.effectText,
+                                            cellEffectFontSize, TextAlignmentOptions.TopLeft, textColor);
+            var effectRect = (RectTransform)effect.transform;
+            effectRect.anchorMin = new Vector2(0f, 0f);
+            effectRect.anchorMax = new Vector2(1f, 1f);
+            effectRect.offsetMin = new Vector2(14f, 44f);    // 下边给属性行留位置
+            effectRect.offsetMax = new Vector2(-14f, -48f);  // 上边给卡名行留位置
+
+            // 三个都得设:TMP 默认不换行,溢出会直接画到格子外面去
+            effect.enableWordWrapping = true;
+            effect.overflowMode = TextOverflowModes.Ellipsis;
+            effect.lineSpacing = 2f;
+        }
+
+        // ---- 底部:属性 + 稀有度 ----
+        // 策略卡没有攻/血,改成显示行动费用和需要指定的目标
+        string statLine = card.cardType == CardType.Tactic || card.unitType == UnitType.Strategy
+            ? $"行动 {card.actionCost}    目标 {card.targetType.GetDescription()}"
+            : $"攻 {card.atk}    血 {card.hp}";
+
+        var stats = RuntimeText.Create(cell, "Stats", statLine, cellStatFontSize,
+                                       TextAlignmentOptions.Left, dimColor);
+        Place((RectTransform)stats.transform, new Vector2(0f, 0f), new Vector2(0f, 0f),
+              new Vector2(14f, 10f), new Vector2(230f, 26f), new Vector2(0f, 0f));
+
+        var rarity = RuntimeText.Create(cell, "Rarity", card.rarity.GetDescription(),
+                                        cellStatFontSize, TextAlignmentOptions.Right, tint);
+        Place((RectTransform)rarity.transform, new Vector2(1f, 0f), new Vector2(1f, 0f),
+              new Vector2(-14f, 10f), new Vector2(120f, 26f), new Vector2(1f, 0f));
+    }
+
+    /// <summary>
+    /// 稀有度配色。和 CardDisplay.RarityColors 是同一套(那边是 private static,只能在这里再写一份),
+    /// 以后改配色两边都要动。
+    /// </summary>
+    private static Color RarityTint(Rarity rarity) => rarity switch
+    {
+        Rarity.Ordinary => new Color(0.92f, 0.92f, 0.92f),   // 普通:白
+        Rarity.Rare => new Color(0.35f, 0.55f, 1.00f),   // 稀有:蓝
+        Rarity.Epic => new Color(0.65f, 0.35f, 1.00f),   // 史诗:紫
+        Rarity.Legend => new Color(1.00f, 0.80f, 0.25f),   // 传说:金
+        Rarity.Hero => new Color(0.95f, 0.25f, 0.25f),   // 英雄:红
+        _ => Color.white,
+    };
 
     // ================================================================ 保存
 
@@ -687,12 +804,23 @@ public class DeckEditorPanel : MonoBehaviour
         rt.sizeDelta = size;
     }
 
+    /// <summary>
+    /// 底栏大按钮。尺寸由布局组按 sizeDelta 排开,所以锚点用中心、pivot 用 (0.5,0.5)。
+    /// 挂一个 LayoutElement 把尺寸也说清楚:哪天有人给 ButtonRow 打开 childControlWidth,
+    /// sizeDelta 会被布局组忽略,那时 LayoutElement 是唯一还能生效的尺寸来源。
+    /// </summary>
     private void CreateButton(RectTransform parent, string name, string label,
-                              Vector2 anchoredPos, UnityEngine.Events.UnityAction onClick)
+                              Vector2 size, UnityEngine.Events.UnityAction onClick)
     {
-        var rt = NewRect(parent, name, new Vector2(1f, 0f), new Vector2(1f, 0f),
-                         anchoredPos, new Vector2(150f, 56f));
-        rt.pivot = new Vector2(1f, 0.5f);
+        var rt = NewRect(parent, name, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                         Vector2.zero, size);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+
+        var le = rt.gameObject.AddComponent<LayoutElement>();
+        le.preferredWidth = size.x;
+        le.preferredHeight = size.y;
+        le.minWidth = size.x;
+        le.minHeight = size.y;
 
         var image = rt.gameObject.AddComponent<Image>();
         image.color = new Color(0.32f, 0.24f, 0.16f, 0.98f);
@@ -701,7 +829,7 @@ public class DeckEditorPanel : MonoBehaviour
         button.targetGraphic = image;
         button.onClick.AddListener(onClick);
 
-        var text = RuntimeText.Create(rt, "Label", label, 24f,
+        var text = RuntimeText.Create(rt, "Label", label, 26f,
                                       TextAlignmentOptions.Center, new Color(0.98f, 0.94f, 0.8f));
         var textRect = (RectTransform)text.transform;
         textRect.anchorMin = Vector2.zero;

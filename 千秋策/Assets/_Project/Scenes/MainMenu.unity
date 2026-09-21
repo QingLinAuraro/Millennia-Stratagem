@@ -1325,7 +1325,7 @@ Transform:
   m_GameObject: {fileID: 663504284}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 498, y: 470, z: -10}
+  m_LocalPosition: {x: -286, y: 484, z: -10}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1600,8 +1600,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   cardPrefab: {fileID: 0}
   library: {fileID: 0}
-  cardCellSize: {x: 150, y: 200}
-  columns: 6
+  cardCellSize: {x: 300, y: 270}
+  columns: 4
   cardCellSpacing: {x: 12, y: 12}
   poolScale: 0.78
   deckRowHeight: 40
