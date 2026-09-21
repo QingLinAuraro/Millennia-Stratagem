@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using DG.Tweening;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -71,11 +72,25 @@ public class UnitActionController : MonoBehaviour
 
     // ---- 拖动状态 ----
     private FieldUnit dragUnit;          // 正在被拖的单位(拖动真正开始后才有值)
+
+    // 这次拖动有没有向 BattlefieldManager 登记过(登记了就一定要还回去,见 ClearDragVisuals / OnDisable)
+    private bool dragCounted;
     private FieldUnit pressedUnit;       // 按下的单位(可能只是点一下,还没到拖动阈值)
     private BattleRow hoveredRow;        // 指针现在停在哪条排上
     private FieldUnit hoveredTarget;     // 指针现在停在哪个"打得到的敌人"上(拖动时,攻击优先于移动)
     private Vector2 pressPosition;
     private RectTransform dragMarker;    // 跟着指针的半透明方块
+
+    // 攻击指向箭头:拖动时指针压在能打的敌人身上,就把"卡牌跟手"换成一根指向目标的箭头。
+    // 理由:攻击不涉及同时移动,让卡牌跟着手走会让人以为这一下是"把卡挪过去";
+    // 箭头只表达一件事 —— 松手打它。表里的顺序完全是"我方在上、敌方在下"决定的。
+    private RectTransform attackArrowHead;
+    private RectTransform attackArrowShaft;
+    private bool attackArrowVisible;
+
+    // 攻击指向箭头的贴图(全部代码生成,不依赖美术资源)
+    private static Sprite arrowHeadSprite;
+    private static Sprite arrowShaftSprite;
 
     /// <summary>选中单位时给"打得到的目标"套的红框(复用同一个池子,不每次新建)</summary>
     private readonly List<RectTransform> targetFrames = new();
@@ -84,6 +99,34 @@ public class UnitActionController : MonoBehaviour
     private readonly List<BattleRow> validDropRows = new();
 
     private const string TargetFrameName = "AttackableTargetFrame";
+
+    /// <summary>攻击指向箭头的箭头尖(画在目标那一侧)</summary>
+    private const string AttackArrowHeadName = "AttackArrowHead";
+
+    /// <summary>攻击指向箭头的箭杆(画在攻击方和目标之间)</summary>
+    private const string AttackArrowShaftName = "AttackArrowShaft";
+
+    /// <summary>拖动时卡牌跟手标记的不透明度(攻击指向时几乎透明)</summary>
+    private const float DragMarkerAlpha = 0.35f;
+
+    /// <summary>攻击指向时卡牌标记的不透明度。**不能设成 0** —— 0 会让 Graphic 不再参与渲染,
+    /// 松手时再淡回来会有一帧闪断。0.12 视觉上等于看不见,但渲染管线一直算着它。</summary>
+    private const float DragMarkerAlphaWhileAttacking = 0.12f;
+
+    /// <summary>箭头/箭杆的颜色(亮金,和选中框一个色系)</summary>
+    private static readonly Color AttackArrowColor = new(1f, 0.85f, 0.35f, 0.95f);
+
+    /// <summary>箭头尖的长度方向尺寸(指向目标的那个三角)</summary>
+    private static readonly Vector2 AttackArrowHeadSize = new(44f, 30f);
+
+    /// <summary>箭头尖离目标中心多远(留出来免得盖住目标卡面)</summary>
+    private const float AttackArrowHeadGap = 52f;
+
+    /// <summary>箭杆粗细</summary>
+    private const float AttackArrowShaftThickness = 6f;
+
+    /// <summary>起点离箭头尖太近就不画箭杆了,只留一个三角(否则会是一条看不清的小横线)</summary>
+    private const float AttackArrowShaftMinLength = 30f;
 
     /// <summary>攻击目标框的颜色(暗红,和选中框的金色区分开)</summary>
     private static readonly Color TargetFrameColor = new(0.95f, 0.28f, 0.24f, 0.85f);
@@ -122,6 +165,15 @@ public class UnitActionController : MonoBehaviour
         hoveredRow = null;
         hoveredTarget = null;
         validDropRows.Clear();
+
+        // 拖动中途被禁用:OnUnitEndDrag 不会再来了,把登记还回去,否则计数永远归不了零,
+        // 那道"拖动结束必须收干净高亮"的闸门就再也不会生效。
+        // 只还计数,不去碰排的颜色 —— 这时 BattlefieldManager 可能已经被销毁了。
+        if (dragCounted)
+        {
+            dragCounted = false;
+            BattlefieldManager.Instance?.ForgetDragHighlight();
+        }
 
         if (highlight != null) highlight.gameObject.SetActive(false);
         if (dragMarker != null) dragMarker.gameObject.SetActive(false);
@@ -330,6 +382,10 @@ public class UnitActionController : MonoBehaviour
         RefreshTargetFrames(unit);             // 红框一直留着:拖到敌人身上就是打它
         ShowDragMarker(unit);
         HighlightMoveTargets(unit);
+        // 向战场登记"现在有东西被拖着" —— 拖完由 ClearDragVisuals 还回去。
+        // 这是硬保证:万一哪条路径忘了清高亮,计数归零时 BattlefieldManager 会强制收干净。
+        BattlefieldManager.Instance?.BeginDragHighlight();
+        dragCounted = true;
 
         if (debugLog) Debug.Log($"[操作] 开始拖动「{unit.DisplayName}」");
     }
@@ -350,11 +406,18 @@ public class UnitActionController : MonoBehaviour
         // 指针底下是不是一个"现在打得到"的敌人?(排只取一次射线,给攻击判定和落点高亮共用)
         var hoverRow = PickRowUnderPointer(eventData.position);
         var target = AttackTargetUnderPointer(dragUnit, eventData.position, hoverRow);
+
+        // ★ 这一段只在"指针刚进/刚出某个目标"这一帧执行。
+        //   原来飘字写在下面 if (hoveredTarget != null) 里面,而那个分支**每帧**都进 ——
+        //   FloatingTipUI.Show 每次都 new 一个 GameObject,等于悬停在敌人身上时每秒创建 60 个飘字对象,
+        //   刷屏的同时还在持续分配。放到这个"状态变化"分支里才是正确的位置。
         if (target != hoveredTarget)
         {
             SetTargetFrameEmphasis(hoveredTarget, false);
             hoveredTarget = target;
             SetTargetFrameEmphasis(hoveredTarget, true);
+
+            if (hoveredTarget != null) ShowTip($"松手攻击「{hoveredTarget.DisplayName}」");
         }
 
         if (hoveredTarget != null)
@@ -362,9 +425,14 @@ public class UnitActionController : MonoBehaviour
             // 攻击优先:指针在敌人身上时不再给排上色,免得看不出来这一下会打谁
             RestoreRowHighlight(hoveredRow);
             hoveredRow = null;
-            ShowTip($"松手攻击「{hoveredTarget.DisplayName}」");
+
+            // 攻击指向:卡牌跟手收掉,改画一根指向目标的箭头
+            SetDragMarkerMode(attacking: true);
             return;
         }
+
+        // 离开目标(或在排之间移动):把箭头收掉,卡牌跟手恢复
+        SetDragMarkerMode(attacking: false);
 
         var row = hoverRow;
         if (row != hoveredRow)
@@ -588,6 +656,16 @@ public class UnitActionController : MonoBehaviour
         hoveredTarget = null;
 
         if (dragMarker != null) dragMarker.gameObject.SetActive(false);
+
+        // 箭头也要收,否则松手之后会留在场上
+        HideAttackArrow();
+
+        // 拖动登记还回去:计数归零时 BattlefieldManager 会强制把所有排的高亮收干净
+        if (dragCounted)
+        {
+            dragCounted = false;
+            BattlefieldManager.Instance?.EndDragHighlight();
+        }
     }
 
     /// <summary>这条排还在场上吗(场景销毁时排会先走,留下的引用不能碰)</summary>
@@ -618,7 +696,197 @@ public class UnitActionController : MonoBehaviour
 
         dragMarker.gameObject.SetActive(true);
         if (dragMarker.parent != null) dragMarker.SetAsLastSibling();
+        SetDragMarkerAlpha(DragMarkerAlpha);
         MoveDragMarker(Input.mousePosition);
+    }
+
+    /// <summary>
+    /// 切换"卡牌跟手"与"攻击指向"两种模式。
+    /// attacking = true:卡牌标记淡到几乎看不见,画箭头指向目标;
+    /// attacking = false:箭头收掉,卡牌标记恢复。
+    /// 用淡入淡出而不是直接开关,是为了拖动中来回划过敌人时不会闪。
+    /// </summary>
+    private void SetDragMarkerMode(bool attacking)
+    {
+        SetDragMarkerAlpha(attacking ? DragMarkerAlphaWhileAttacking : DragMarkerAlpha);
+        if (attacking) ShowAttackArrow();
+        else HideAttackArrow();
+    }
+
+    private void SetDragMarkerAlpha(float alpha)
+    {
+        if (dragMarker == null) return;
+        var image = dragMarker.GetComponent<Image>();
+        if (image == null) return;
+
+        var color = image.color;
+        if (Mathf.Approximately(color.a, alpha)) return;      // 每帧都会调,值没变就别起补间
+        DOTween.Kill(image);
+        image.DOColor(new Color(color.r, color.g, color.b, alpha), 0.12f).SetUpdate(true);
+    }
+
+    // ---- 攻击指向箭头 ----
+
+    /// <summary>
+    /// 拖动时指针压在能打的敌人身上:从攻击方画一根指向目标的箭头,代替"卡牌跟手"。
+    /// 每次指针移动都重算(起点是攻击方当前位置,单位可能刚被移动过,不能缓存)。
+    ///
+    /// 【坐标】全程在**箭头父级(根画布)的局部坐标**里算,不要用 RectTransform.position。
+    ///   BattleCanvas 是 ScreenSpaceOverlay + CanvasScaler(参考分辨率 1920×1080),这种画布下
+    ///   `position` 是屏幕像素,而 sizeDelta/anchoredPosition 是画布单位,两者差一个 scaleFactor。
+    ///   在 1080p 全屏时 scaleFactor = 1,两者数值恰好相等 —— 所以只在开发者那块屏幕上看着是对的;
+    ///   换 2560×1440(1.333)箭头会整体偏移、间距与长度按比例放大,分辨率再怪一点会飘出画布。
+    ///   同文件的 MoveDragMarker() 一直用的是 ScreenPointToLocalPointInRectangle,这里沿用同一套。
+    /// </summary>
+    private void ShowAttackArrow()
+    {
+        var from = RectOf(dragUnit);
+        var to = RectOf(hoveredTarget);
+        if (from == null || to == null) { HideAttackArrow(); return; }
+
+        if (!EnsureAttackArrow()) return;
+
+        var parent = attackArrowHead.parent as RectTransform;
+        if (parent == null || parent != attackArrowShaft.parent) { HideAttackArrow(); return; }
+
+        // 把两端的**屏幕坐标**换到父级局部坐标(和 MoveDragMarker 同一套换算)
+        var cam = EventCameraFor(parent);
+        var fromScreen = (Vector2)ScreenCenterOf(from.position);
+        var toScreen = (Vector2)ScreenCenterOf(to.position);
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, fromScreen, cam, out var fromLocal) ||
+            !RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, toScreen, cam, out var toLocal))
+        {
+            HideAttackArrow();
+            return;
+        }
+
+        // 两点相差不到 1 画布单位就没法定义方向(也说明两者重叠了),直接不画
+        var delta = toLocal - fromLocal;
+        if (delta.sqrMagnitude < 1f) { HideAttackArrow(); return; }
+
+        attackArrowHead.SetAsLastSibling();
+        attackArrowShaft.SetAsLastSibling();
+
+        // 【方向】从攻击方指向目标,角度由**实际坐标**算出来,不写死"朝上/朝下"。
+        //   之前我按排的添加顺序推断屏幕上是"我方在上、敌方在下",直接把三角画成朝下,结果反了 ——
+        //   排的上下是由 RowsContainer 的布局决定的,靠猜不靠谱。现在方向永远是"攻击方 → 目标"。
+        var direction = delta.normalized;
+        float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
+
+        // 箭头贴在目标那一侧(离目标中心 AttackArrowHeadGap 个画布单位),别把目标卡面糊住
+        var headLocal = toLocal - direction * AttackArrowHeadGap;
+        attackArrowHead.localPosition = headLocal;
+        // 贴图默认尖端朝"上"(+Y),所以要把 +Y 转到 direction:角度再减 90°
+        attackArrowHead.localRotation = Quaternion.Euler(0f, 0f, angle - 90f);
+
+        // 箭杆从攻击方一直拉到箭头根部,不会戳穿三角
+        var headBase = headLocal + direction * (AttackArrowHeadSize.y * 0.5f - AttackArrowShaftThickness * 0.5f);
+        float length = Vector2.Distance(fromLocal, headBase);
+        if (length <= AttackArrowShaftMinLength)
+        {
+            attackArrowShaft.gameObject.SetActive(false);
+        }
+        else
+        {
+            attackArrowShaft.gameObject.SetActive(true);
+            attackArrowShaft.localPosition = (fromLocal + headBase) * 0.5f;
+            // 一根横条,绕 Z 轴转到两点连线的角度就是箭杆
+            attackArrowShaft.localRotation = Quaternion.Euler(0f, 0f, angle);
+            attackArrowShaft.sizeDelta = new Vector2(length, AttackArrowShaftThickness);
+        }
+
+        attackArrowVisible = true;
+    }
+
+    private void HideAttackArrow()
+    {
+        if (!attackArrowVisible) return;
+        attackArrowVisible = false;
+
+        if (attackArrowHead != null) attackArrowHead.gameObject.SetActive(false);
+        if (attackArrowShaft != null) attackArrowShaft.gameObject.SetActive(false);
+    }
+
+    /// <summary>箭头和箭杆都建好并显示出来了吗(建不出来返回 false,调用方就别继续算了)</summary>
+    private bool EnsureAttackArrow()
+    {
+        if (attackArrowHead == null || attackArrowHead.parent == null) attackArrowHead = CreateAttackArrowPart(
+            AttackArrowHeadName, EnsureArrowHeadSprite(), AttackArrowHeadSize);
+        if (attackArrowShaft == null || attackArrowShaft.parent == null) attackArrowShaft = CreateAttackArrowPart(
+            AttackArrowShaftName, EnsureArrowShaftSprite(), new Vector2(1f, AttackArrowShaftThickness));
+
+        if (attackArrowHead == null || attackArrowShaft == null) return false;
+
+        attackArrowHead.gameObject.SetActive(true);
+        // 箭杆的显隐由 ShowAttackArrow 按实际长度决定,这里不无条件打开
+        return true;
+    }
+
+    private RectTransform CreateAttackArrowPart(string objectName, Sprite sprite, Vector2 size)
+    {
+        var go = new GameObject(objectName, typeof(RectTransform), typeof(Image));
+        var rt = (RectTransform)go.transform;
+        var image = go.GetComponent<Image>();
+
+        image.sprite = sprite;
+        image.color = AttackArrowColor;
+        image.raycastTarget = false;      // 只是个提示,绝不能挡住底下排/单位的射线
+
+        var host = VisualHost();
+        if (host == null) { Destroy(go); return null; }
+
+        rt.SetParent(host, false);
+        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = size;
+        go.SetActive(false);
+        return rt;
+    }
+
+    /// <summary>
+    /// 箭头尖的三角:**尖端朝上(+Y)**,底边在下。
+    /// ShowAttackArrow 会把 +Y 旋转到"攻击方 → 目标"的方向,所以这里是中性朝向,不带上下假设。
+    /// 资源只生成一次,之后复用。
+    /// </summary>
+    private static Sprite EnsureArrowHeadSprite()
+    {
+        if (arrowHeadSprite != null) return arrowHeadSprite;
+
+        const int w = 32, h = 24;
+        var texture = new Texture2D(w, h, TextureFormat.RGBA32, false);
+        var clear = new Color(0f, 0f, 0f, 0f);
+
+        for (int y = 0; y < h; y++)
+        {
+            // y 越大越靠上。**尖端必须在最上(y = h-1)** —— ShowAttackArrow 是按
+            // "贴图尖端朝 +Y"来算旋转的,这里画反了箭头就会指向目标的反方向。
+            // t: 1 = 最上(尖端,宽 0),0 = 最下(底边,最宽)
+            float t = (float)y / (h - 1);
+            float halfWidth = Mathf.Max(0.5f, (1f - t) * (w * 0.5f));
+            for (int x = 0; x < w; x++)
+            {
+                float distanceFromCenter = Mathf.Abs(x - (w - 1) * 0.5f);
+                float alpha = Mathf.Clamp01(halfWidth - distanceFromCenter + 0.5f);
+                texture.SetPixel(x, y, alpha <= 0f ? clear : new Color(1f, 1f, 1f, alpha));
+            }
+        }
+        texture.Apply();
+
+        arrowHeadSprite = Sprite.Create(texture, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), 100f);
+        return arrowHeadSprite;
+    }
+
+    /// <summary>箭杆用的纯白 1×1 Sprite,拉伸成任意长度的细条</summary>
+    private static Sprite EnsureArrowShaftSprite()
+    {
+        if (arrowShaftSprite != null) return arrowShaftSprite;
+
+        var texture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+        texture.SetPixel(0, 0, Color.white);
+        texture.Apply();
+
+        arrowShaftSprite = Sprite.Create(texture, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 100f);
+        return arrowShaftSprite;
     }
 
     private void MoveDragMarker(Vector2 screenPosition)

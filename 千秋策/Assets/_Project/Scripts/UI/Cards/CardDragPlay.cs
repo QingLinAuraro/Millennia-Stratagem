@@ -70,6 +70,9 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
     private CommandPointController commandPoints;
     private bool hooked;                 // CP / 战场两个订阅都挂上了(见 HookBattle)
 
+    // 这次拖动有没有向 BattlefieldManager 登记过(登记了就一定要还回去,见 ReleaseDragHighlight)
+    private bool dragCounted;
+
     /// <summary>
     /// 最多重试多少帧去找那两个组件。防的是"主菜单里几十张预览卡每帧都 FindObjectOfType"
     /// 这种白费功夫 —— 战斗里正常一两帧内就挂上了,用不到这么多。
@@ -161,9 +164,24 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
         hooked = false;
         hookAttempts = 0;
         commandPoints = null;
+
+        // 被销毁/禁用打断的拖动:OnEndDrag 不会再来了,这里必须把计数还回去
+        ReleaseDragHighlight();
         battlefield = null;
 
         if (IsDragging) ReleaseDragState();
+    }
+
+    /// <summary>
+    /// 把手牌拖动登记的高亮计数还回去。用 dragCounted 保证**只还一次** ——
+    /// OnEndDrag 和 OnDisable 都可能走到这里,重复减会让计数变负,
+    /// 之后一次正常的拖动结束就会把计数减到 0,把别处正亮着的排高亮提前清掉。
+    /// </summary>
+    private void ReleaseDragHighlight()
+    {
+        if (!dragCounted) return;
+        dragCounted = false;
+        battlefield?.EndDragHighlight();
     }
 
     private void OnCommandPointsChanged(int cp, int cpMax) => RefreshPlayable();
@@ -258,6 +276,8 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
         rect.localScale = Vector3.one * (fan != null ? fan.CardScale * dragScale : dragScale);
 
         // §10.2:拖起来的时候把能落的排高亮出来
+        battlefield?.BeginDragHighlight();
+        dragCounted = true;
         battlefield?.HighlightDropTargets(display.Data);
     }
 
@@ -285,6 +305,8 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
             result = battlefield.TryResolveDrop(display, eventData, out message);
 
         battlefield?.ClearHighlights();
+        // 拖动计数归零 —— 这条是硬保证:少清一次也不会把绿色留在场上(见 BattlefieldManager 的说明)
+        ReleaseDragHighlight();
 
         if (result == CardPlayResult.Deployed || result == CardPlayResult.Released)
         {

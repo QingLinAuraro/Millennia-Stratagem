@@ -221,6 +221,41 @@ public class BattlefieldManager : MonoBehaviour
 
     private void OnDisable() => highlight?.ClearHighlights();
 
+    // ================================================================ 拖动期间的高亮闸门
+    //
+    // 【为什么要这道闸门】排的绿/红高亮只应该存在于"玩家正拖着东西"的这段时间里。
+    // 但清理动作散落在两条拖动链路上(CardDragPlay 的手牌拖动、UnitActionController 的单位拖动),
+    // 一旦某条链路漏了清理(或被销毁/禁用打断而没走到清理那一步),绿色就会一直留在场上,
+    // 表现为"这条排常亮",而且看着像和排里有没有单位有关 —— 其实是残留的高亮。
+    //
+    // 与其继续逐个补清理点,不如把不变式本身做成强制的:拖动计数归零 = 不允许有任何排亮着。
+    // 这样即使将来又加了新的拖动入口,忘了写清理也不会留下常亮。
+
+    private int activeDrags;
+
+    /// <summary>有东西被拖起来了(手牌或场上单位),这时才允许排亮着</summary>
+    internal void BeginDragHighlight()
+    {
+        activeDrags++;
+    }
+
+    /// <summary>一次拖动结束。计数归零就强制把所有排的高亮收干净</summary>
+    internal void EndDragHighlight()
+    {
+        activeDrags = Mathf.Max(0, activeDrags - 1);
+        if (activeDrags == 0) highlight?.ClearHighlights();
+    }
+
+    /// <summary>
+    /// 只把计数还回去,不去碰排的颜色。
+    /// 给"拖动中途组件被禁用/场景正在销毁"用 —— 那时 highlight 和排可能已经没了,碰了会抛异常;
+    /// 但同时必须把计数清掉,否则闸门永远不会再触发一次清理。
+    /// </summary>
+    internal void ForgetDragHighlight()
+    {
+        activeDrags = Mathf.Max(0, activeDrags - 1);
+    }
+
     // ================================================================ 场景接线
 
     private void ResolveRefs()

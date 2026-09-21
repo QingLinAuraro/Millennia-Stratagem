@@ -161,6 +161,26 @@ public class BattleRow : MonoBehaviour
         cachedColor = true;
     }
 
+    /// <summary>
+    /// 重缓存底色。**目前全仓库没有任何调用点** —— 保留它是为了这个真实存在的坑：
+    ///
+    /// CacheBackground() 是懒加载(第一次 SetHighlight/FlashInvalid 才去读 background.color)。
+    /// 只要在"组件挂上之后、第一次高亮之前"有谁改过底色(改 Inspector、换主题、按排类型上色),
+    /// 那么第一次读到什么 originalColor 就永远是什么,SetHighlight(None) 会把那个中间色当成
+    /// 原色还原 —— 排会一直挂着错颜色,而且**不会有任何报错**,只能靠肉眼发现。
+    /// 真遇到这种情况,在"确认当前不高亮"的时刻调一次这个方法即可。
+    ///
+    /// **只在没有高亮时才能调**:排正亮着的时候去读 background.color,读到的就是高亮色本身,
+    /// 那等于亲手把高亮色写成原色,反而制造出"永久常亮"。
+    /// </summary>
+    internal void RefreshBackgroundCache()
+    {
+        if (Highlight != RowHighlight.None) return;      // 亮着的时候不碰缓存
+
+        cachedColor = false;
+        CacheBackground();
+    }
+
     // ===== 成员名单(§2.3 的相邻链) =====
 
     /// <summary>把新成员(兵牌或建筑)登记进这条排。index = 插在链上的第几位(0 = 最前)</summary>
@@ -240,6 +260,11 @@ public class BattleRow : MonoBehaviour
     public void SetHighlight(RowHighlight state)
     {
         CacheBackground();
+
+        // 状态没变就别重写颜色 —— 拖动时这个方法每帧都会被调,
+        // 每次都写一遍 background.color 会让 UI 每帧重建顶点,白费性能。
+        if (state == Highlight) return;
+
         Highlight = state;
         if (background == null) return;
 
