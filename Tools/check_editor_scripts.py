@@ -92,6 +92,12 @@ print()
 # ---- 5) 类型检查 ----
 out_dll = os.path.join(os.environ.get("TEMP", "."), "EditorTypeCheck.dll")
 argv = ["-nologo", "-target:library", "-langversion:9.0", "-nostdlib+", "-out:" + out_dll]
+# 必须定义这些宏,否则整段代码会被预处理器吃掉、检查变成空转:
+#   UNITY_EDITOR 是 Unity 编辑器的标志 —— 大量 Editor 脚本(包括 Window 工具、
+#   自定义 Inspector)整个文件都包在 `#if UNITY_EDITOR` 里。不定义它,csc 根本看不到
+#   那些代码,于是"改错了也报通过"。(踩过的坑:给 FullscreenGameView.cs 注入一个
+#   不存在的类型,检查照样通过;把 #if 注掉之后立刻就报错了。)
+argv += ["-define:UNITY_EDITOR", "-define:UNITY_2022_3_OR_NEWER", "-define:UNITY_STANDALONE_WIN"]
 argv += ["-r:" + r for r in refs]
 argv += sources
 

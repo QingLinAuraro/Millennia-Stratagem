@@ -5,9 +5,10 @@
 读《数据表demo.xlsx》的「秦·卡池」/「汉·卡池」两张工作表，按朝代分文件夹
 生成 CardData(.asset + .asset.meta)，字段与 Assets/_Project/Scripts/Core/Data/CardData.cs 一一对应。
 
-产出：
-  Assets/_Project/Data/Cards/Qin/<cardId>_<名称>.asset
-  Assets/_Project/Data/Cards/Han/<cardId>_<名称>.asset
+产出（**真值见下面的 ROOT 常量**；卡池在 Resources/ 下，因为运行时靠 Resources.Load 读，
+      不在 Data/ 下 —— Data/ 目前只有几个空目录）：
+  千秋策/Assets/_Project/Resources/Cards/Qin/<cardId>_<名称>.asset
+  千秋策/Assets/_Project/Resources/Cards/Han/<cardId>_<名称>.asset
 
 约定：
   · 插图(artwork)一律留空 —— 后续在 Inspector 里补（用户本轮明确「插图暂时不用管」）。

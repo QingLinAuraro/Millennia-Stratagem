@@ -13,7 +13,7 @@
 │   ├─ 千秋策策划案.md          设计文档(卡片效果、费用曲线、卡池规则都以它为准)
 │   └─ 数据表demo.xlsx          数值表(卡池表由脚本从策划案写回,别手改)
 ├─ Tools/                     数据表 / 卡牌资源的生成脚本(Python)
-│   ├─ build_card_assets.py      xlsx → CardData .asset(96 张卡)
+│   ├─ build_card_assets.py      xlsx → CardData .asset(48 张卡，秦/汉各 24)
 │   ├─ build_dynasty_sheets.py   生成秦/汉卡池工作表 + 回写策划案标记区
 │   ├─ build_qin_sheet.py        秦朝卡组设计表
 │   └─ _final_check.py           数据表自检
@@ -38,11 +38,13 @@ _Project/
 │   └─ Effects/ Backgrounds/    特效贴图 / 战场背景(空,待补)
 ├─ Animations/                动画控制器(Battle.controller,目前是空壳)
 ├─ Audio/BGM/ SFX/            音乐 / 音效(空,待补)
-├─ Data/                      ScriptableObject 数据
-│   ├─ Cards/Han/ Qin/          汉、秦卡池各 24 张
+├─ Data/                      ScriptableObject 数据(目前都是空目录,待补)
 │   ├─ Factions/                朝代配置(空,待补)
 │   ├─ Effects/                 策略卡效果预设(空,待补)
 │   └─ Config/                  平衡数值表,如 CP 上限 12/24(空,待补)
+├─ Resources/                 需要 Resources.Load 的资源(卡池真身在这里,**不在 Data/ 下**)
+│   ├─ Cards/Han/ Qin/          汉、秦卡池各 24 张
+│   └─ Decks/                   Default_Han.asset、Default_Qin.asset(默认卡组,各 30 张)
 ├─ Fonts/                     中文字体资源
 ├─ Localization/              多语言表(空,待补)
 ├─ Materials/ Shaders/        材质 / 着色器(空,待补)
@@ -150,7 +152,7 @@ dotnet build Assembly-CSharp.csproj -t:Rebuild -v minimal -nologo
 
 单位与结算:多目标战术卡的**指定目标 UI**(决水灌城/盐铁论的第 2、3 个目标目前由结算层自动挑)、支援类部署增益的手动选目标(目前自动挑)、60 秒回合超时、单位移动/攻击的动画与特效。
 对手:AI 只做简单难度(普通难度的"预判下回合斩杀线"未实现);AI 不会主动把策略卡留给特定目标。
-界面:设置面板、投降的二次确认弹窗、MainMenu 还没登记进 Build Settings(结算界面的「返回主菜单」会失败并飘字提示)。
+界面:设置面板、投降的二次确认弹窗。(MainMenu / Loading / Battle 三张场景都已登记进 Build Settings 且 enabled,「返回主菜单」可用。)
 工程:单元测试 —— 项目脚本全在预定义程序集 `Assembly-CSharp`,而 Unity Test Framework 要求测试放在 asmdef 里,
       两者互相引用不到;要接 NUnit 得先把脚本搬进 asmdef(会动到所有脚本的程序集归属),暂时用 `BattleSelfTest` 代替。
       另外 `Assembly-CSharp.csproj` 的文件清单是手写的,新增 `.cs` 之后要把它补进 `<Compile Include>`(或让 Unity 重新生成)。
