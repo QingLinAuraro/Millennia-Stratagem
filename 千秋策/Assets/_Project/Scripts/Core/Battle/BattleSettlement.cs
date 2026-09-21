@@ -106,8 +106,11 @@ public static class BattleSettlement
     // ================================================================ 攻击(§7.1)
 
     /// <summary>
-    /// 一次完整攻击(§7.1.2 精确顺序):基础伤害 → 减伤 → 扣血 → 死亡判定 → 反击判定 → 血战回血。
+    /// 一次完整攻击(§7.1.2):基础伤害 → 减伤 → 扣血 → 死亡判定 → 反击 → 血战回血。
     /// 非法攻击(不在射程、被守护)什么都不做并返回 false,reason 说明原因。
+    ///
+    /// 【反击是"同时交换"】目标被这一下打死时,它的反击**照样**结算(伤害按攻击前的攻击力算),
+    /// 两边同归于尽是正常结果。旧行为是"目标 hp &gt; 0 才反击",已改。
     /// </summary>
     public static bool Attack(FieldUnit attacker, FieldUnit target, out string reason)
     {
@@ -116,6 +119,11 @@ public static class BattleSettlement
         if (!BattleRules.CanAttack(attacker, target, out reason)) return false;
 
         int damage = Mathf.Max(0, attacker.Atk);
+
+        // 反击用的攻击力必须**在打之前**取下来:目标被打死之后 KillUnit 会 Destroy 掉它,
+        // 那时候再去读 target.Atk 就是碰一个已销毁的对象。见下面步骤 7。
+        int counterAtk = Mathf.Max(0, target.Atk);
+
         int dealt = DealDamage(target, damage, attacker, isAttack: true);
         Debug.Log($"[结算] 「{attacker.DisplayName}」攻击「{target.DisplayName}」:造成 {dealt} 点伤害" +
                   $"（剩余 HP {target.Hp}/{target.MaxHp}）");
@@ -133,12 +141,18 @@ public static class BattleSettlement
         bool targetDead = !target.IsAlive;
         if (targetDead) KillUnit(target);
 
-        // §7.1.2 第 7 步:同类互攻才反击(近战↔近战、远程↔远程);目标已经死了就不反击
-        if (!targetDead && BattleRules.Counters(attacker, target) && target.Atk > 0)
+        // §7.1.2 第 7 步:同类互攻才反击(近战↔近战、远程↔远程);近战↔远程交叉攻击不反击。
+        //
+        // 【这一刀是"同时交换",不是"挨打之后再看还能不能还手"】——注意这里**故意不看 targetDead**。
+        // 目标就算被这一下打死,它的反击伤害照样落到攻击方身上(用上面提前取好的 counterAtk)。
+        // 反过来也一样:两边同归于尽是正常结果,不是异常。
+        // 策划案 §7.1.2 原文档写的是 `&& target.hp > 0`(打死就不反击),已按这条同步改掉。
+        if (BattleRules.Counters(attacker, target) && counterAtk > 0)
         {
-            int counter = DealDamage(attacker, target.Atk, target, isAttack: true);
+            int counter = DealDamage(attacker, counterAtk, target, isAttack: true);
             Debug.Log($"[结算] 「{target.DisplayName}」反击「{attacker.DisplayName}」:造成 {counter} 点伤害" +
-                      $"（剩余 HP {attacker.Hp}/{attacker.MaxHp}）");
+                      $"（剩余 HP {attacker.Hp}/{attacker.MaxHp}）" +
+                      (targetDead ? "（它是被这一下打死的,反击照常结算）" : ""));
 
             if (!attacker.IsAlive) KillUnit(attacker);
         }

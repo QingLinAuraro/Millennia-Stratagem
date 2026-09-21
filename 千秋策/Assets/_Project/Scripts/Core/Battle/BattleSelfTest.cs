@@ -238,15 +238,13 @@ public class BattleSelfTest : MonoBehaviour
             Check(his.Hp == Mathf.Max(0, hisHpBefore - expected),
                   $"目标掉血正确（{expected} 点）", $"HP {hisHpBefore} → {his.Hp},预期 {Mathf.Max(0, hisHpBefore - expected)}");
 
-            if (his.IsAlive)
+            // 反击按"交换同时发生"算(§7.1.2 步骤 7):目标就算被这一下打死,它的反击伤害照样生效,
+            // 所以这里**不再用 his.IsAlive 分情况** —— 那个分支在旧规则下永远不会走到,等于没测。
+            if (BattleRules.Counters(mine, his) && hisAtk > 0)
             {
                 int counter = Mathf.Max(0, hisAtk - mine.DamageReduction);
                 Check(mine.Hp == Mathf.Max(0, myHpBefore - counter),
                       $"同类近战反击正确（{counter} 点）", $"HP {myHpBefore} → {mine.Hp},预期 {Mathf.Max(0, myHpBefore - counter)}");
-            }
-            else
-            {
-                Log("（目标被一击打死,跳过反击检查）");
             }
         }
 

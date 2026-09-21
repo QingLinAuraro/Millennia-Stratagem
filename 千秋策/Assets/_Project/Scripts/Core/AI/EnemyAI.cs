@@ -881,7 +881,10 @@ public class EnemyAI : MonoBehaviour
         int score = 0;
 
         bool kills = attackerAtk > 0 && attackerAtk >= target.Hp;
-        bool dies = BattleRules.Counters(attacker, target) && targetAtk >= attacker.Hp;
+        // 反击判定:同类互攻才反击(§2.6)。注意反击是"同时交换"(§7.1.2 步骤 7)——
+        // **目标被这一下打死,它的反击照样结算**,所以这里和 kills 无关。
+        bool counters = BattleRules.Counters(attacker, target) && targetAtk > 0;
+        bool dies = counters && targetAtk >= attacker.Hp;
 
         if (attackerAtk <= 0 && targetAtk > 0)
         {
@@ -889,8 +892,9 @@ public class EnemyAI : MonoBehaviour
             // 排序上垫底就够了(有别的攻击就打别的),不该变成"空过"。
             score += 1;
         }
-        else if (kills && !dies) score += 200;                    // 白吃一个
-        else if (kills && dies) score += 50 + (target.Atk + target.Hp) - (attacker.Atk + attacker.Hp);   // 一换一,看身材差
+        // 这里原本是 kills && !dies(「白吃一个」)。改成只看 kills —— 因为反击改成同时结算之后,
+        // 只要对方会反击,dies 就必然为真,那个分支永远走不到(死代码),留着只会误导。
+        else if (kills) score += 50 + (target.Atk + target.Hp) - (attacker.Atk + attacker.Hp);   // 交换,看身材差
         else
         {
             // 磨血不是"没换到就亏"。这里原本是 -100,结果是"打一下大营 3 点"输给"再铺一张牌",
