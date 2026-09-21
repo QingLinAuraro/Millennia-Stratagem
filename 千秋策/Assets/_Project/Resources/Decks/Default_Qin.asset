@@ -13,7 +13,7 @@ MonoBehaviour:
   m_Name: Default_Qin
   m_EditorClassIdentifier: 
   deckName: "\u79E6\xB7\u91CD\u7532\u5F13\u5F29"
-  primaryDynasty: "\u79E6"
+  primaryDynasty: 秦
   description: "\u94C1\u9E70\u5251\u58EB\u4E0E\u51FD\u8C37\u94C1\u536B\u67B6\u4F4F\u524D\u6392,\u8FDE\u5F29\u58EB\u548C\u8E76\u5F20\u795E\u5F29\u5728\u540E\u6392\u6301\u7EED\u8F93\u51FA\u3002"
   cards:
   - {fileID: 11400000, guid: 2407918625b808e53db86d55f6139e0d, type: 2}

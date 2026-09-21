@@ -13,7 +13,7 @@ MonoBehaviour:
   m_Name: Default_Han
   m_EditorClassIdentifier: 
   deckName: "\u6C49\xB7\u5175\u79CD\u6DF7\u6742"
-  primaryDynasty: "\u6C49"
+  primaryDynasty: 汉
   description: "\u6B65\u9A91\u5F13\u6DF7\u6742\u7684\u4E2D\u519B\u6D41:\u6750\u5B98\u9A91\u58EB\u95EA\u51FB\u62A2\u8282\u594F,\u6E38\u5FBC\u9A91\u4E0E\u5C04\u58F0\u58EB\u8FDE\u6218\u6EDA\u96EA\u7403\u3002"
   cards:
   - {fileID: 11400000, guid: 18f25ba000da1fd889666c1c86e424ad, type: 2}
