@@ -617,6 +617,11 @@ public static class CardEffectResolver
                 target.SetHp(restore);
                 target.GrantInvincible(1);
                 target.ShowNumber(restore, healing: true, 0, target.Hp);
+
+                // §2.3 / §7.3:摧毁时挂上的 Debuff 要跟着撤掉(军械库 → ATK -1,粮草 → CP 上限 -2)。
+                // 只在"从废墟修回来"这一刻还原:修好之后它就是个普通建筑,再修缮走下面那条普通回血。
+                BattleSettlement.OnBuildingRepaired(target);
+
                 return $"修复了被摧毁的「{target.BuildingName}」（{restore} HP，1 回合无敌）";
             }
 

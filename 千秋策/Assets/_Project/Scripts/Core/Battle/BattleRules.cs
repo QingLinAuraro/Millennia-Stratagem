@@ -130,13 +130,18 @@ public static class BattleRules
     }
 
     /// <summary>
-    /// 从 unit 所在的 from 排**往后走一步**会到哪条排(排距 1)。后军不能再退、己方中军不能后退,返回 false。
+    /// 从 unit 所在的 from 排**往后走一步**会到哪条排(排距 1)。
+    ///
+    /// ⚠ 后退**只有一个用途**:§7.4 袭扰中的骑兵从敌方中军撤回共享前军。除此之外一律不许后退 ——
+    ///   连站在共享前军的单位也不行:**前军是"顶上去就回不来"的位置**,进了前军就只能继续前进
+    ///   (骑兵可以再冲一次敌方中军)或者战死在前军。
+    ///   这里原先还有一条「共享前军 → 自己中军」的分支,2026-09-24 按规则确认后移除。
     ///
     /// 和 TryForwardRow 是镜像的一对,同样是**明文查表**、同样按 `unit.Side` 算方向。
-    /// 合法的情况只有两种:
-    ///   · 站在共享前军 → 回自己中军(§7.4 袭扰撤回。注意共享前军 physical 是 playerFront,
-    ///     `from.Side` 恒为 Player,所以这里必须看 `unit.Side`,否则敌方骑兵永远退不回去);
+    /// 合法的情况只有一种:
     ///   · 站在对面中军(袭扰中)→ 回共享前军。`from.Side != unit.Side` 就是"这条中军不是我的"。
+    ///     注意共享前军 physical 是 playerFront、`from.Side` 恒为 Player,所以必须看 `unit.Side`,
+    ///     否则敌方骑兵永远退不回去。
     /// </summary>
     public static bool TryBackwardRow(FieldUnit unit, BattleRow from, out BattleSide side, out BattleRowType type)
     {
@@ -147,20 +152,14 @@ public static class BattleRules
 
         switch (from.RowType)
         {
-            // 共享前军:谁站在这儿都是"往前顶过了头",后退一步回的是**自己的**中军
-            case BattleRowType.Front:
-                side = unit.Side;                  // 不能写 BattleSide.Player:from.Side 恒为 Player
-                type = BattleRowType.Mid;
-                return true;
-
-            // 对面中军(袭扰中):退一步回共享前军
+            // 对面中军(袭扰中):退一步回共享前军。这是全场唯一允许的后退
             case BattleRowType.Mid:
                 if (from.Side == unit.Side) return false;   // 自己的中军:规则上不允许主动后退
                 side = BattleSide.Player;                   // 共享前军物理上就是 playerFront
                 type = BattleRowType.Front;
                 return true;
 
-            // 后军 / 中军都没有"再往后"这一档(§2.3 只有三档)
+            // 共享前军(进来了就别想回去)、后军、自己的中军:都没有"再往后"这一档(§2.3 只有三档)
             default:
                 return false;
         }
@@ -225,7 +224,13 @@ public static class BattleRules
             return MoveStep.Ok(row, IsRetreatInto(unit, row));
         }
 
-        return MoveStep.Illegal(forward ? "已经在最前排，无法继续前进" : "后军无法再后退");
+        // 后退被拒时,站在前军和站在后军的理由不一样 —— 分开说,玩家才知道自己卡在哪一步
+        if (!forward)
+            return MoveStep.Illegal(unit.Row != null && unit.Row.RowType == BattleRowType.Front
+                ? "进了前军就不能再后退"
+                : "后军无法再后退");
+
+        return MoveStep.Illegal("已经在最前排，无法继续前进");
     }
 
     /// <summary>
@@ -247,6 +252,18 @@ public static class BattleRules
         return side == BattleSide.Player ? board.PlayerMid : board.EnemyMid;
     }
 
+    /// <summary>
+    /// 这个单位这一下攻击**从哪条排算** —— 永远是它物理上站的那条排。
+    ///
+    /// ⚠ 袭扰骑兵也一样,不需要特判:它站的地方就是**敌方中军**,`ForwardDistance` 会给那条排取号
+    ///   (从它自己阵营看是第 3 位),到敌方后军正好 1 排。
+    ///   上一版这里对袭扰骑兵改写成"对面中军",其实**白改** —— 病根在 ForwardDistance 只拿 RowType
+    ///   去查 `RowRank(attackerSide, Mid)` = 1,把"站在敌方中军"当成了"站在自家中军"(详见那里)。
+    ///   现在取号按具体排走,这里就老实返回它站的排:起点与单位状态永远一致,
+    ///   不会出现"IsRaiding 还是 true、其实已经不在敌方中军上"却仍然够得着后军的假射程。
+    /// </summary>
+    public static BattleRow AttackRowOf(FieldUnit unit) => unit != null ? unit.Row : null;
+
     /// <summary>当前回合数(没有 TurnController 时按 1 算)。判定"刚进来的回合"用</summary>
     public static int CurrentRound()
     {
@@ -264,14 +281,18 @@ public static class BattleRules
     /// (踩过的坑:早先这里对攻击者那条排也照 row.Side 取号,于是敌人站在桥上时,
     ///  我方单位打它算出 +1 看着没问题,而敌人从桥上打我方中军算出 -1「目标在身后」。)
     ///
-    /// 目标的排号则参照攻击者视角取(见 RankAsSeenFrom):共享前军永远解析成同一条物理排,
-    /// 其余四条排各属一方,视角不同就镜像换算。
+    /// ⚠ **两端都必须用 `RankAsSeenFrom` 给"具体那条排"取号,不能只拿 `RowType` 查 `RowRank`。**
+    /// 曾经攻击者那端写的是 `RowRank(attackerSide, attacker.RowType)` —— 它把"排类型"当成"这一方的这一档",
+    /// 于是**站在敌方中军的袭扰骑兵被算成"站在自家中军"(第 1 位)**:敌方后军在第 4 位,
+    /// 排距 = 4 - 1 = 3,近战射程 1 直接判「目标超出射程」——
+    /// 现象就是「骑兵都冲进敌方中军了,后军的军械库/粮草却打不动」(§7.4 唯一的合法目标)。
+    /// 目标那端早就是 `RankAsSeenFrom` 了,攻击者那端漏了同一件事:敌方中军从攻击者视角看是第 3 位。
     /// </summary>
     public static int ForwardDistance(BattleSide attackerSide, BattleRow attacker, BattleRow target)
     {
         if (attacker == null || target == null) return -99;
 
-        int a = RowRank(attackerSide, attacker.RowType);
+        int a = RankAsSeenFrom(attackerSide, attacker);
         int b = RankAsSeenFrom(attackerSide, target);
         if (a < 0 || b < 0) return -99;
 
@@ -465,36 +486,64 @@ public static class BattleRules
     /// 检查顺序照 §7.1.1:AP → 状态(压制/无敌/袭扰) → 活着 → 阵营 → 方向 → 射程 → 守护。
     /// </summary>
     public static bool CanAttack(FieldUnit attacker, FieldUnit target, out string reason)
-        => CanAttack(attacker, target, attacker != null ? attacker.Row : null, out reason);
+        => CanAttack(attacker, target, AttackRowOf(attacker), requireActionPoint: true, out reason);
 
     /// <summary>
     /// 同上,但假设攻击者站在 fromRow 上(不动场上任何东西)。
     ///
     /// 给 AI 的走位评分用:想知道"挪到前军之后打不打得到大营",不能真把它挪过去 ——
-    /// 那会修改战场,评分阶段只能试算。真正的攻击照旧走三参数那版(用单位当前所在的排)。
+    /// 那会修改战场,评分阶段只能试算。真正的攻击照旧走三参版(起点 = `AttackRowOf(attacker)`,
+    /// 也就是它现在站的那条排)。AI 试算"骑兵冲进敌方中军之后能不能拆后军建筑"时,
+    /// 传进来的 fromRow 就是敌方中军那条排,一样按具体排取号。
     /// </summary>
     public static bool CanAttack(FieldUnit attacker, FieldUnit target, BattleRow fromRow, out string reason)
+        => CanAttack(attacker, target, fromRow, requireActionPoint: true, out reason);
+
+    /// <summary>
+    /// **只判"这个目标能不能被打"**:阵营、无敌、袭扰限制、方向、射程、守护。
+    /// **不判行动前置条件**(AP &gt; 0 / 没被压制 / 不是本回合刚部署)—— 那三条属于"现在能不能发起行动",
+    /// 不属于"打到它合不合法"。
+    ///
+    /// ⚠ 结算层必须用这一版,不能用 `CanAttack`:2026-10-30 起攻击改成"**先付款、再结算**",
+    ///   付款时已经把 AP 扣掉了。1 AP 的兵(弓兵/步兵)付完费 AP = 0,结算里再跑一遍带 AP 判定的
+    ///   `CanAttack` 就会被自己判成「行动力已耗尽」—— 表现是"弓兵明明在射程内,却说费用/行动力不足"。
+    ///   骑兵有 2 AP,付完还剩 1,所以当时只有 1 AP 的单位会中招。
+    /// </summary>
+    public static bool CanAttackTarget(FieldUnit attacker, FieldUnit target, BattleRow fromRow, out string reason)
+        => CanAttack(attacker, target, fromRow, requireActionPoint: false, out reason);
+
+    private static bool CanAttack(FieldUnit attacker, FieldUnit target, BattleRow fromRow,
+                                  bool requireActionPoint, out string reason)
     {
         reason = null;
 
         if (attacker == null || target == null) { reason = "没有可攻击的目标"; return false; }
         if (attacker.IsBuilding) { reason = "建筑不能攻击"; return false; }
         if (!attacker.IsAlive) { reason = "这个单位已经阵亡"; return false; }
-        if (attacker.SuppressTurns > 0) { reason = "这个单位被压制，无法行动"; return false; }
-        if (attacker.Ap <= 0) { reason = "行动力已耗尽"; return false; }
-        if (attacker.DeployedThisTurn && !HasKeyword(attacker.Data, Keyword.Blitz))
-        { reason = "刚部署的单位本回合不能行动（需要「闪击」）"; return false; }
+
+        // 这三条是"现在能不能发起一次行动",不是"打到它合不合法" —— 结算层跳过(见 CanAttackTarget)
+        if (requireActionPoint)
+        {
+            if (attacker.SuppressTurns > 0) { reason = "这个单位被压制，无法行动"; return false; }
+            if (attacker.Ap <= 0) { reason = "行动力已耗尽"; return false; }
+            if (attacker.DeployedThisTurn && !HasKeyword(attacker.Data, Keyword.Blitz))
+            { reason = "刚部署的单位本回合不能行动（需要「闪击」）"; return false; }
+        }
 
         if (!target.IsAlive) { reason = "目标已经阵亡"; return false; }
         if (attacker.Side == target.Side) { reason = "不能攻击己方单位"; return false; }
         if (target.InvincibleRounds > 0) { reason = "该建筑处于无敌状态，不能被指定"; return false; }
 
         // §7.4 袭扰骑兵:只能拆敌方后军建筑,不能攻击任何单位
-        if (attacker.IsRaiding && !target.IsBuilding)
-        { reason = "袭扰中的骑兵只能攻击敌方后军建筑"; return false; }
-        if (attacker.IsRaiding && target.Row != null && target.Row.RowType != BattleRowType.Back)
+        //
+        // ⚠ 目标排类型必须拿**目标实际所在的那条排**去比:
+        //   大营在中军,所以"袭扰骑兵打不到大营"是这条规则的自然结果,不用再单独写一句。
+        if (attacker.IsRaiding && (!target.IsBuilding || target.Row == null || target.Row.RowType != BattleRowType.Back))
         { reason = "袭扰中的骑兵只能拆敌方后军建筑"; return false; }
 
+        // 攻击起点 = 攻击者**物理上站的那条排**(由调用方传入,三参版走 AttackRowOf)。
+        // 方向与射程都按**攻击者自己的阵营**算,不从排上取 —— 共享前军的 row.Side 恒为 Player。
+        // 袭扰骑兵站的是敌方中军:ForwardDistance 按"具体那条排"取号(第 3 位),到敌方后军 1 排。
         int distance = ForwardDistance(attacker.Side, fromRow, target.Row);
         if (distance < 0) { reason = "只能攻击前方的目标"; return false; }
 
@@ -571,16 +620,38 @@ public static class BattleRules
         // 「已经在同一条排上」上面已经单独判过,所以这里不用再管 to == from。
         // 注意:站在**敌方中军**的袭扰骑兵上面已经走掉了(unit.IsRaiding 那个分支),
         // 所以能走到这里的、站在中军上的单位一定是站在**自己的中军**上,再往前就是共享前军。
-        if (!TryForwardRow(unit, from, out _, out var forwardType) || forwardType != targetType)
+        if (!TryForwardRow(unit, from, out var forwardSide, out var forwardType) || forwardType != targetType)
         {
-            reason = targetType == BattleRowType.Back
-                ? "只能向前推进，不能退回己方后军（只有袭扰中的骑兵能撤回前军）"
-                : "只能移动到相邻的前方排";
+            // 袭扰骑兵想往"敌方后军"再走一步(拆完建筑想接着往里钻):路上没有这一档,它只能撤回前军。
+            // 这一句单独写,是因为通用文案("只能移动到相邻的前方排")对着敌方后军说不通 ——
+            // 那条排明明就在它前面,玩家会以为是自己点歪了。
+            bool raiderPushingDeeper = unit.IsRaiding && targetType == BattleRowType.Back;
+
+            reason = raiderPushingDeeper
+                ? "袭扰骑兵打完建筑只能撤回共享前军，不能继续往敌方后军走"
+                : targetType == BattleRowType.Back
+                    ? "只能向前推进，不能退回己方后军（只有袭扰中的骑兵能撤回前军）"
+                    : "只能移动到相邻的前方排";
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.LogWarning($"[规则] 拦下一次非前进的移动:「{unit.DisplayName}」({unit.Side})" +
                              $"在 {from.DisplayName}（{from.RowType}），想走到 {targetType}；" +
                              $"按它自己的阵营,往前走一步是 {forwardType}");
 #endif
+            return false;
+        }
+
+        // 落点必须是方向闸门指出的**那一条**排 —— 光对上"排类型"还不够。
+        // 中军有两条(我方 / 敌方),RowType 都是 Mid,只比类型会放过两种错位:
+        //   · 站共享前军的骑兵拖到**自己的**中军 → 实为后退,却被当成"往前一步"放行;
+        //   · 站后军的兵拖到**敌方**中军 → 一次跨两条排,也被当成"往前一步"放行。
+        // 只有 BattleRowType 入口不会产生这两种输入(落点是 ResolveMoveRowTo 推出来的),
+        // 鼠标拖动直接给"指针底下那条排",所以这一条必须有。
+        //
+        // ⚠ 比的是 Side 而不是 Owner:共享前军的 Side 是那个被迫填的假值 Player,
+        //   TryForwardRow 给的 forwardSide 也是 Player,两边才对得上(用 Owner 会在敌方占前军时误判)。
+        if (sideCarrier != null && (sideCarrier.RowType != targetType || sideCarrier.Side != forwardSide))
+        {
+            reason = "只能移动到相邻的前方排";
             return false;
         }
 

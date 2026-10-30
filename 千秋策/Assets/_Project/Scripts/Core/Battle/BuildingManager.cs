@@ -69,10 +69,10 @@ public class BuildingManager
     {
         new BuildingSpec { displayName = "大营",   side = BattleSide.Player, row = BattleRowType.Mid,  hp = 20 },
         new BuildingSpec { displayName = "军械库", side = BattleSide.Player, row = BattleRowType.Back, hp = 5 },
-        new BuildingSpec { displayName = "粮草营", side = BattleSide.Player, row = BattleRowType.Back, hp = 5 },
+        new BuildingSpec { displayName = "粮草", side = BattleSide.Player, row = BattleRowType.Back, hp = 5 },
         new BuildingSpec { displayName = "大营",   side = BattleSide.Enemy,  row = BattleRowType.Mid,  hp = 20 },
         new BuildingSpec { displayName = "军械库", side = BattleSide.Enemy,  row = BattleRowType.Back, hp = 5 },
-        new BuildingSpec { displayName = "粮草营", side = BattleSide.Enemy,  row = BattleRowType.Back, hp = 5 },
+        new BuildingSpec { displayName = "粮草", side = BattleSide.Enemy,  row = BattleRowType.Back, hp = 5 },
     };
 
     /// <summary>找某一方的某座建筑(大营/军械库/粮草营)。找不到返回 null</summary>
@@ -124,12 +124,13 @@ public class BuildingManager
                 var unit = members[j];
                 if (unit == null || !unit.IsUnit || !unit.IsAlive) continue;
 
-                // 判断这个兵牌是否属于受害方:
-                // 1. 排的阵营 == 受害方(自己后场/中场的兵)
-                // 2. 或者排是敌方中军,但这个单位正在袭扰(属于受害方)
-                var isMine = row.Side == victimSide;
-                var isRaiderFromMySide = row.RowType == BattleRowType.Mid && row.Side != victimSide && unit.Side == victimSide;
-                if (isMine || isRaiderFromMySide) unit.ApplyAtkDelta(-1);
+                // ⚠ 判据只能是**单位自己的 Side**,不能用 `row.Side`。
+                //   共享前军的 row.Side 恒为 Player:照排判的话,我方军械库被毁会给
+                //   站在前军的**敌方**单位一起 -1;敌方军械库被毁又漏掉站在前军的敌方单位。
+                //   更常见的是袭扰骑兵 —— 它站在**对面中军**上(那条排的 Side 是对方),
+                //   照排判会让它躲掉本该吃的那一刀,反而扣在我方自己头上。
+                //   兵牌阵营是落位时定死的、进前军也不变(见 FieldUnit.SetRow),所以这里一定准。
+                if (unit.Side == victimSide) unit.ApplyAtkDelta(-1);
             }
         }
 
@@ -161,9 +162,8 @@ public class BuildingManager
                 var unit = members[j];
                 if (unit == null || !unit.IsUnit || !unit.IsAlive) continue;
 
-                var isMine = row.Side == side;
-                var isRaiderFromMySide = row.RowType == BattleRowType.Mid && row.Side != side && unit.Side == side;
-                if (isMine || isRaiderFromMySide) unit.ApplyAtkDelta(1);
+                // 与 AddArsenalPenalty 同一套判据:只看单位自己的阵营(理由见那里)
+                if (unit.Side == side) unit.ApplyAtkDelta(1);
             }
         }
 

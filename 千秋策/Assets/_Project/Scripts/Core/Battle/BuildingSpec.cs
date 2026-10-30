@@ -9,8 +9,11 @@ using UnityEngine;
 /// (不在卡池里),所以这里只记"叫什么、在哪一方哪条排、多少血":
 /// 实体由 BattlefieldManager 用 Build.prefab 生成,血数字写进预制体上那颗角标。
 ///
-/// 血量照§2.3 建筑表:大营 20(归零立即判负)/ 军械库 5(被毁 → 敌方 ATK -1)/
-/// 粮草 5(被毁 → 敌方 CP 上限 -2)。摧毁后的 Debuff 结算还没接。
+/// 血量照§2.3 建筑表:大营 20(归零立即判负)/ 军械库 5(被毁 → **主人**全场 ATK -1)/
+/// 粮草 5(被毁 → **主人** CP 上限 -2)。Debuff 结算在 `BattleSettlement.OnBuildingDestroyed`,
+/// 维修卡把它修回来时由 `BattleSettlement.OnBuildingRepaired` 撤掉。
+/// ⚠ displayName 必须和 `BattleRules.ArsenalName` / `BattleRules.GranaryName` 逐字一致,
+///   结算层是拿名字认建筑的 —— 写成「粮草营」的话粮草 Debuff 永远不会触发。
 /// </summary>
 [Serializable]
 public class BuildingSpec

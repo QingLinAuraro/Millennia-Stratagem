@@ -214,6 +214,20 @@ public class CardDragPlay : MonoBehaviour, IPointerDownHandler, IBeginDragHandle
         bool dim = reason != null;
         if (fan != null) fan.SetDimmed(rect, dim);           // 手牌的透明度统一由 FanLayout 算
         else SetAlpha(dim ? disabledAlpha : 1f);
+
+        // 出得了 = 卡面亮一圈淡绿描边。判据和"变灰"**必须是同一个**(reason),
+        // 否则会出现"牌是灰的、外面却有一圈能用的绿框"这种自相矛盾的画面。
+        EnsureOutline().SetOn(reason == null);
+    }
+
+    private CardActionOutline outline;
+
+    /// <summary>「现在能出」的描边:第一次用到时挂上,之后复用</summary>
+    private CardActionOutline EnsureOutline()
+    {
+        if (outline == null) outline = GetComponent<CardActionOutline>();
+        if (outline == null) outline = gameObject.AddComponent<CardActionOutline>();
+        return outline;
     }
 
     private void SetAlpha(float alpha)

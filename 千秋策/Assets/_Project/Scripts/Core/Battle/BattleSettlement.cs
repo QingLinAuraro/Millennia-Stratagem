@@ -23,7 +23,7 @@ using UnityEngine;
 ///       出牌与行动在结算前都会先看这个,结束之后谁也动不了。
 ///     · FatigueDamageFor(次数):疲劳伤害 = 次数 × 2(2→4→6→8…,§5.4.1)。
 ///       想改成别的曲线就改这一个方法,两边牌堆共用。
-///     · ArsenalAtkPenalty:军械库被毁后给那一方全场兵牌(含之后上场的)-N ATK,可以叠加。
+///     · ArsenalAtkPenalty:军械库被毁后给那一方全场兵牌(含之后上场的)-1 ATK,只叠一层(§2.3)。
 /// </summary>
 public static class BattleSettlement
 {
@@ -111,12 +111,22 @@ public static class BattleSettlement
     ///
     /// 【反击是"同时交换"】目标被这一下打死时,它的反击**照样**结算(伤害按攻击前的攻击力算),
     /// 两边同归于尽是正常结果。旧行为是"目标 hp &gt; 0 才反击",已改。
+    ///
+    /// ⚠ 这是**结算层**,不管 AP / 行动费用 CP —— 那两个在 `BattleActionExecutor.AttackUnit` 里
+    ///    **结算之前**扣好。不要在别的地方直接调它:它是"伤害真的发生了",一旦这里打死人,
+    ///    卡片会被 `KillUnit` 销毁,任何"事后回滚"都救不回来(2026-10-30 那个"0 费无限攻击 +
+    ///    致死攻击把卡打没"的 bug,根子就是先调它、后扣费)。
+    ///   只有自检/调试需要绕过付费时才会直接调。
+    ///
+    /// ⚠ 这里复查用的是 `CanAttackTarget`(**不含 AP/压制/刚部署**),不是 `CanAttack`:
+    ///   付款在结算之前,1 AP 的兵付完费 AP 已经是 0,用 `CanAttack` 会把合法攻击判成
+    ///   「行动力已耗尽」——弓兵/步兵全体攻击失效,只有 2 AP 的骑兵看不出来。
     /// </summary>
     public static bool Attack(FieldUnit attacker, FieldUnit target, out string reason)
     {
         reason = null;
         if (MatchOver) { reason = "对局已经结束"; return false; }
-        if (!BattleRules.CanAttack(attacker, target, out reason)) return false;
+        if (!BattleRules.CanAttackTarget(attacker, target, BattleRules.AttackRowOf(attacker), out reason)) return false;
 
         int damage = Mathf.Max(0, attacker.Atk);
 
@@ -242,7 +252,11 @@ public static class BattleSettlement
 
     /// <summary>
     /// 建筑被毁(§2.3):不移除、留在链上占位(维修卡可以把它修回来),
-    /// 但不可被指定为目标,并且立刻向它的主人施加 Debuff。
+    /// 但不可被指定为目标,并且立刻向**它的主人**施加 Debuff。
+    ///
+    /// ⚠ 受害方永远是 `building.Side`(建筑主人),不是"拆它的那一方"。
+    ///   2026-10-30 之前这里写的是"建筑主人的对面",于是**玩家拆掉敌方粮草/军械库,
+    ///   挨罚的反而是自己**(CP 上限 -2 / 全场 ATK -1),这是最典型的"打得好反而被惩罚"。
     /// </summary>
     private static void OnBuildingDestroyed(FieldUnit building)
     {
@@ -263,25 +277,60 @@ public static class BattleSettlement
 
         if (building.BuildingName == BattleRules.ArsenalName)
         {
-            // 军械库:敌方全场兵牌和后续上场兵牌 ATK -1(军械尽失,武备废弛)
-            var targetSide = owner == BattleSide.Player ? BattleSide.Enemy : BattleSide.Player;
+            // 军械库:被毁那一方的全场兵牌(含之后上场的)ATK -1 —— 军械尽失,武备废弛。
+            // 受害方 = 建筑主人:谁家的军械库没了,谁家的兵掉攻击力。
             var b = Board;
-            if (b != null) b.AddArsenalPenalty(targetSide);
+            if (b != null) b.AddArsenalPenalty(owner);
 
-            Debug.Log($"[结算] 军械库被毁:{BattleRules.SideName(targetSide)}全场兵牌 ATK -1");
+            Debug.Log($"[结算] {BattleRules.SideName(owner)}的军械库被毁:{BattleRules.SideName(owner)}全场兵牌 ATK -1");
         }
         else if (building.BuildingName == BattleRules.GranaryName)
         {
-            // 粮草:敌方 CP 上限 -2(粮草被焚,补给断绝)。受伤的是**建筑主人的对面**那一方,
-            // 双方对称,所以走同一段代码。
-            var victim = owner == BattleSide.Player ? BattleSide.Enemy : BattleSide.Player;
+            // 粮草:被毁那一方 CP 上限 -2 —— 粮草被焚,补给断绝。受害方同样是建筑主人。
+            ChangeCpMax(owner, -2);
 
-            GetPlayerState(victim)?.ChangeBonus(-2);
-            if (victim == BattleSide.Player) RefreshLocalHud();
-            else EnemyDeckController.Instance?.NotifyCpChanged();
-
-            Debug.Log($"[结算] 粮草被焚:{BattleRules.SideName(victim)}CP 上限 -2");
+            Debug.Log($"[结算] {BattleRules.SideName(owner)}的粮草被焚:{BattleRules.SideName(owner)} CP 上限 -2");
         }
+    }
+
+    /// <summary>
+    /// 建筑被维修卡修回来(§7.3):把摧毁时挂上的 Debuff 撤掉 —— 军械库还回 ATK -1,粮草还回 CP 上限。
+    ///
+    /// 只在"从废墟修回来"那一刻调(CardEffectResolver 的 `!target.IsAlive` 分支),所以不会重复还原:
+    /// 修好之后它就是个普通建筑,再修缮走的是普通回血。
+    /// </summary>
+    public static void OnBuildingRepaired(FieldUnit building)
+    {
+        if (building == null || !building.IsBuilding || building.IsCamp) return;
+
+        var owner = building.Side;
+
+        if (building.BuildingName == BattleRules.ArsenalName)
+        {
+            var b = Board;
+            if (b != null) b.RemoveArsenalPenalty(owner);
+            Debug.Log($"[结算] {BattleRules.SideName(owner)}的军械库被修复:{BattleRules.SideName(owner)}全场兵牌 ATK 惩罚解除");
+        }
+        else if (building.BuildingName == BattleRules.GranaryName)
+        {
+            ChangeCpMax(owner, +2);
+            Debug.Log($"[结算] {BattleRules.SideName(owner)}的粮草被修复:{BattleRules.SideName(owner)} CP 上限 +2");
+        }
+    }
+
+    /// <summary>
+    /// 改某一方的 CP 上限(`delta` 为负 = 粮草被焚,正 = 修回来),顺手把 HUD 与手牌刷新一遍。
+    /// 直接改 PlayerState 的话,界面上限和"这张卡还打不打得起"都不会跟着变。
+    /// </summary>
+    private static void ChangeCpMax(BattleSide side, int delta)
+    {
+        var state = GetPlayerState(side);
+        if (state == null) return;
+
+        state.ChangeBonus(delta);
+
+        if (side == BattleSide.Player) RefreshLocalHud();
+        else EnemyDeckController.Instance?.NotifyCpChanged();
     }
 
     /// <summary>

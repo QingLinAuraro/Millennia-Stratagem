@@ -56,8 +56,6 @@ public class UnitActionController : MonoBehaviour
     [Header("拖动")]
     [Tooltip("指针移动超过多少像素才算「拖动」(以内算点击选中)。太小容易误移动,太大拖起来费劲")]
     [SerializeField] private float dragThreshold = 12f;
-    [Tooltip("拖动时跟着指针的那个半透明方块的颜色")]
-    [SerializeField] private Color dragMarkerColor = new(1f, 0.85f, 0.35f, 0.35f);
 
     [Header("选中框")]
     [Tooltip("选中框相对卡面放大多少(1 = 正好贴住卡面)")]
@@ -79,14 +77,28 @@ public class UnitActionController : MonoBehaviour
     private BattleRow hoveredRow;        // 指针现在停在哪条排上
     private FieldUnit hoveredTarget;     // 指针现在停在哪个"打得到的敌人"上(拖动时,攻击优先于移动)
     private Vector2 pressPosition;
-    private RectTransform dragMarker;    // 跟着指针的半透明方块
 
-    // 攻击指向箭头:拖动时指针压在能打的敌人身上,就把"卡牌跟手"换成一根指向目标的箭头。
-    // 理由:攻击不涉及同时移动,让卡牌跟着手走会让人以为这一下是"把卡挪过去";
-    // 箭头只表达一件事 —— 松手打它。表里的顺序完全是"我方在上、敌方在下"决定的。
+    /// <summary>正在"原地晃动"的那张卡(拖动时卡牌不再跟手,只晃一下;见 BeginDragWobble)</summary>
+    private RectTransform wobbleRect;
+    private Vector3 wobbleBaseScale = Vector3.one;
+    private Quaternion wobbleBaseRotation = Quaternion.identity;
+
+    // 拖动指向箭头:拖动时从被拖的卡画一根箭头到指针(或到指针压住的敌人)。
+    // **箭头是拖动时唯一的跟随物** —— 卡牌本身留在原地,只轻轻晃一下:
+    //   ① 让"卡没动"这件事本身说明"这一下不是把卡挪过去";
+    //   ② 松手才决定落点,拖动过程中不去猜玩家的意图。
+    // 箭头颜色直接表示"这一下会做什么":赤=攻击、绿=移动/袭扰、灰=松手什么都不会发生。
     private RectTransform attackArrowHead;
     private RectTransform attackArrowShaft;
     private bool attackArrowVisible;
+
+    /// <summary>拖动时这一下打算做什么(只影响箭头颜色与指向)</summary>
+    private enum DragArrowIntent
+    {
+        Idle,       // 落在空处:松手不会有动作
+        Move,       // 落在能走的排上(含袭扰)
+        Attack,     // 压在能打的敌人身上
+    }
 
     // 攻击指向箭头的贴图(全部代码生成,不依赖美术资源)
     private static Sprite arrowHeadSprite;
@@ -106,21 +118,23 @@ public class UnitActionController : MonoBehaviour
     /// <summary>攻击指向箭头的箭杆(画在攻击方和目标之间)</summary>
     private const string AttackArrowShaftName = "AttackArrowShaft";
 
-    /// <summary>拖动时卡牌跟手标记的不透明度(攻击指向时几乎透明)</summary>
-    private const float DragMarkerAlpha = 0.35f;
+    /// <summary>攻击:箭头赤红。红色只表示一件事 —— 松手就打它</summary>
+    private static readonly Color AttackArrowColor = new(0.95f, 0.42f, 0.36f, 0.95f);
 
-    /// <summary>攻击指向时卡牌标记的不透明度。**不能设成 0** —— 0 会让 Graphic 不再参与渲染,
-    /// 松手时再淡回来会有一帧闪断。0.12 视觉上等于看不见,但渲染管线一直算着它。</summary>
-    private const float DragMarkerAlphaWhileAttacking = 0.12f;
+    /// <summary>移动/袭扰:箭头青绿。和"排可以落"的绿底是一套语言</summary>
+    private static readonly Color MoveArrowColor = new(0.45f, 0.88f, 0.62f, 0.9f);
 
-    /// <summary>箭头/箭杆的颜色(亮金,和选中框一个色系)</summary>
-    private static readonly Color AttackArrowColor = new(1f, 0.85f, 0.35f, 0.95f);
+    /// <summary>落在空处:箭头灰,意思是"松手什么都不会发生"</summary>
+    private static readonly Color IdleArrowColor = new(0.75f, 0.78f, 0.82f, 0.45f);
 
     /// <summary>箭头尖的长度方向尺寸(指向目标的那个三角)</summary>
     private static readonly Vector2 AttackArrowHeadSize = new(44f, 30f);
 
-    /// <summary>箭头尖离目标中心多远(留出来免得盖住目标卡面)</summary>
+    /// <summary>攻击时箭头尖离目标中心多远(留出来免得盖住目标卡面)</summary>
     private const float AttackArrowHeadGap = 52f;
+
+    /// <summary>移动时箭头尖离指针多远(留一点,免得三角正好糊在光标上)</summary>
+    private const float MoveArrowHeadGap = 18f;
 
     /// <summary>箭杆粗细</summary>
     private const float AttackArrowShaftThickness = 6f;
@@ -176,7 +190,10 @@ public class UnitActionController : MonoBehaviour
         }
 
         if (highlight != null) highlight.gameObject.SetActive(false);
-        if (dragMarker != null) dragMarker.gameObject.SetActive(false);
+        StopDragWobble();
+
+        // 箭头是挂在根画布上的独立物体,不跟着本组件走 —— 组件被关掉时得自己收
+        HideAttackArrow();
 
         for (int i = 0; i < targetFrames.Count; i++)
             if (targetFrames[i] != null) targetFrames[i].gameObject.SetActive(false);
@@ -317,7 +334,10 @@ public class UnitActionController : MonoBehaviour
     {
         if (!IsUsable(unit)) return;
 
+        // 换选中:旧的那张把「可操作」描边还回去,新的那张让位给金框
+        SetActionOutlineSelected(selected, false);
         selected = unit;
+        SetActionOutlineSelected(unit, true);
         MoveHighlight(unit);
         RefreshTargetFrames(unit);
         if (debugLog) Debug.Log($"[操作] 选中「{unit.DisplayName}」");
@@ -325,6 +345,7 @@ public class UnitActionController : MonoBehaviour
 
     private void ClearSelection()
     {
+        SetActionOutlineSelected(selected, false);
         selected = null;
         // 选中框是挂在单位身上的:单位被销毁时它会跟着一起没,所以这里也要能容忍"已销毁"
         if (highlight != null) highlight.gameObject.SetActive(false);
@@ -377,10 +398,18 @@ public class UnitActionController : MonoBehaviour
 
         pressedUnit = unit;
         dragUnit = unit;
+
+        // 换选中:上一张的「可操作」描边要还回去,不然它会一直暗着(被金框顶掉了却没人恢复)
+        if (selected != null && selected != unit) SetActionOutlineSelected(selected, false);
+
         selected = unit;                       // 拖动中保持选中,松手后还看得见金框
         MoveHighlight(unit);
         RefreshTargetFrames(unit);             // 红框一直留着:拖到敌人身上就是打它
-        ShowDragMarker(unit);
+        // 卡牌**不跟手**:只在原地晃一下。跟手的只有一个箭头(见 UpdateDragArrow),
+        // 落点要等松手才决定 —— 拖动过程中不去猜"你是在挪它还是要打人"。
+        // 顺带把"选中框"让给金色选中框(描边叠两层会显得很吵)。
+        SetActionOutlineSelected(unit, true);
+        BeginDragWobble(unit);
         HighlightMoveTargets(unit);
         // 向战场登记"现在有东西被拖着" —— 拖完由 ClearDragVisuals 还回去。
         // 这是硬保证:万一哪条路径忘了清高亮,计数归零时 BattlefieldManager 会强制收干净。
@@ -401,11 +430,13 @@ public class UnitActionController : MonoBehaviour
         // 拖到一半单位没了(反击/疲劳结算):直接把拖动收尾,别继续拿旧引用做判定
         if (!IsUsable(dragUnit)) { CancelDrag(); return; }
 
-        MoveDragMarker(eventData.position);
-
         // 指针底下是不是一个"现在打得到"的敌人?(排只取一次射线,给攻击判定和落点高亮共用)
+        //
+        // ⚠ 这里和松手用**同一个** ResolveDropTarget:拖动预览必须等于松手结局。
+        //   以前预览只问"打得到谁",指针一进敌方中军就被"卡缝补判"吸到最近的敌人身上 ——
+        //   明明松手会冲进去袭扰,画面上却写着"松手攻击 X",看起来就是"被吸附住、进不去中军"。
         var hoverRow = PickRowUnderPointer(eventData.position);
-        var target = AttackTargetUnderPointer(dragUnit, eventData.position, hoverRow);
+        var target = ResolveDropTarget(dragUnit, hoverRow, eventData.position, out bool raidIntent, out bool raidable);
 
         // ★ 这一段只在"指针刚进/刚出某个目标"这一帧执行。
         //   原来飘字写在下面 if (hoveredTarget != null) 里面,而那个分支**每帧**都进 ——
@@ -417,7 +448,10 @@ public class UnitActionController : MonoBehaviour
             hoveredTarget = target;
             SetTargetFrameEmphasis(hoveredTarget, true);
 
-            if (hoveredTarget != null) ShowTip($"松手攻击「{hoveredTarget.DisplayName}」");
+            if (hoveredTarget != null)
+                ShowTip(raidable
+                    ? $"松手攻击「{hoveredTarget.DisplayName}」；按住 Shift 松手 = 冲进敌方中军袭扰"
+                    : $"松手攻击「{hoveredTarget.DisplayName}」");
         }
 
         if (hoveredTarget != null)
@@ -426,24 +460,29 @@ public class UnitActionController : MonoBehaviour
             RestoreRowHighlight(hoveredRow);
             hoveredRow = null;
 
-            // 攻击指向:卡牌跟手收掉,改画一根指向目标的箭头
-            SetDragMarkerMode(attacking: true);
+            // 箭头指向那张敌人卡:赤色 = 松手打它
+            UpdateDragArrow(eventData.position, DragArrowIntent.Attack);
             return;
         }
-
-        // 离开目标(或在排之间移动):把箭头收掉,卡牌跟手恢复
-        SetDragMarkerMode(attacking: false);
 
         var row = hoverRow;
         if (row != hoveredRow)
         {
             RestoreRowHighlight(hoveredRow);
             hoveredRow = row;
+
+            // 袭扰落点和"往前一步"在画面上长得一样(都是这条排变绿),得单独说一句,
+            // 否则玩家分不清松手是"往前挪一排"还是"冲进敌方中军"。
+            if (hoveredRow != null && raidIntent)
+                ShowTip("松手冲进敌方中军袭扰（只能拆后军建筑）；压在敌人身上则按攻击处理");
         }
 
-        if (hoveredRow == null) return;
+        bool canMove = hoveredRow != null && CanMoveTo(dragUnit, hoveredRow);
+        if (hoveredRow != null)
+            hoveredRow.SetHighlight(canMove ? RowHighlight.Valid : RowHighlight.Invalid);
 
-        hoveredRow.SetHighlight(CanMoveTo(dragUnit, hoveredRow) ? RowHighlight.Valid : RowHighlight.Invalid);
+        // 落点是"那条排",没有具体卡片可以吸过去 —— 箭头就指向指针本身,颜色说明这一下是走还是无效
+        UpdateDragArrow(eventData.position, canMove ? DragArrowIntent.Move : DragArrowIntent.Idle);
     }
 
     /// <summary>松手:落在敌人身上 = 攻击,落在排上 = 移动,落在别处 = 什么都不做</summary>
@@ -451,7 +490,27 @@ public class UnitActionController : MonoBehaviour
     {
         var acting = dragUnit;
         var row = eventData != null ? PickRowUnderPointer(eventData.position) : null;
-        var target = acting != null && eventData != null ? AttackTargetUnderPointer(acting, eventData.position) : null;
+
+        // 松手结局与拖动预览走**同一个** ResolveDropTarget —— 看到什么就打出什么。
+        // 袭扰意图(§7.4):骑兵站在共享前军、往敌方中军拖、而且这一下真的进得去。
+        //   这一条下关掉"卡缝补判"(敌方中军里站着兵时,补判会把整条排都判成攻击区),
+        //   只认直接压在卡上的命中;按住 Shift 连直接命中也不认,强制按袭扰处理。
+        bool raidIntent = false, raidable = false;
+        FieldUnit target = null;
+        if (acting != null && eventData != null)
+            target = ResolveDropTarget(acting, row, eventData.position, out raidIntent, out raidable);
+
+        // 「拖过去却什么都没发生」这种反馈只能靠日志查:把落点排、袭扰意图与判定理由一起打出来。
+        // 只读判定,不改任何状态 —— CanAttack 是纯函数(不动场上任何东西)。
+        if (debugLog && acting != null)
+        {
+            string attackReason = target != null && BattleRules.CanAttack(acting, target, out string why) ? "可以" : null;
+            Debug.Log($"[操作] 松手:「{acting.DisplayName}」在 {(acting.Row != null ? acting.Row.DisplayName : "（不在任何排上）")}" +
+                      $",指针底下是 {(row != null ? row.DisplayName : "（没有排）")}" +
+                      $"{(raidable ? "（这里可选袭扰）" : string.Empty)}" +
+                      $"{(raidIntent ? "（按袭扰处理,关掉卡缝补判）" : string.Empty)}" +
+                      $",攻击目标 {(target != null ? $"「{target.DisplayName}」({attackReason})" : "无")}");
+        }
 
         ClearDragVisuals();
         dragUnit = null;
@@ -472,7 +531,7 @@ public class UnitActionController : MonoBehaviour
         // ---- 结局二:落在排上 → 移动 ----
         if (!CanMoveTo(acting, row))
         {
-            BattleRules.CanMoveTo(acting, acting.Row, row.RowType, RowCarrierFor(acting, row.RowType),
+            BattleRules.CanMoveTo(acting, acting.Row, row.RowType, row,
                                   out string why, out bool wasRetreat);
             // 「已经在这条排上」不算失败,别红闪也别飘警告 —— 就是原地放下而已
             bool sameRow = acting.Row == row && !wasRetreat;
@@ -487,7 +546,62 @@ public class UnitActionController : MonoBehaviour
             return;
         }
 
-        MoveSelectedTo(acting, row);
+        // 落位的左右:和出牌用同一套 InsertIndexMath(指针横坐标 → 链上下标)
+        MoveSelectedTo(acting, row, BattlefieldManager.ResolveInsertIndex(row, eventData));
+    }
+
+    /// <summary>按住 Shift 拖动 = 只走位,不吸附到敌人身上。用来把"这一下到底是打还是冲进去"从吸附里夺回来。</summary>
+    private static bool ForceMoveHeld()
+        => Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
+    /// <summary>
+    /// 这个单位现在能不能从共享前军冲进敌方中军(§7.4 进入条件里与格子无关的那几条):
+    /// 骑兵、站在共享前军、还没在袭扰。
+    ///
+    /// 兵种必须判:步兵站前军根本去不了敌方中军,若也算成袭扰意图,就会把"卡缝补判"一并关掉,
+    /// 步兵隔着缝打敌方中军的兵会失效。
+    /// </summary>
+    private static bool CanRaidFrom(FieldUnit unit)
+        => IsUsable(unit) && unit.Data != null && unit.Data.unitType == UnitType.Cavalry
+           && !unit.IsRaiding
+           && unit.Row != null && unit.Row.RowType == BattleRowType.Front;
+
+    /// <summary>row 是不是"对面那条中军" —— 中军有两条、RowType 都是 Mid,只能靠 Side 分开</summary>
+    private static bool IsEnemyMidRow(FieldUnit unit, BattleRow row)
+        => row != null && row.RowType == BattleRowType.Mid && row.Side != unit.Side;
+
+    /// <summary>
+    /// 拖动/松手时"这一下会打谁"。返回 null = 这一下不是攻击(交给移动处理)。
+    ///
+    /// raidIntent = 这一下按袭扰(移动)解析;raidable = 这个位置本来就有袭扰这个选项(只用于提示)。
+    /// 判序照 §7.4:
+    ///   · 能袭扰 + 指针在对面中军 + 这条排真的进得去(`CanMoveTo` 同时管方向与容量);
+    ///   · 这一条下**不做卡缝补判**(pointerRow 传 null),只认直接压在卡上的命中;
+    ///   · 压在敌人卡上 = 攻击(明确、可预期),按住 Shift 则强制袭扰;
+    ///   · 指针落在排的空处 = 袭扰。
+    ///
+    /// 于是"敌方中军站满了兵"时,往排的空处一放就能冲进去(以前补判会把整条排吸成攻击区),
+    /// 想压着某个敌人打也照旧能打。预览与松手共用这一份判定,不会再出现"画着攻击、松手却移动"。
+    /// </summary>
+    private FieldUnit ResolveDropTarget(FieldUnit unit, BattleRow pointerRow, Vector2 screenPosition,
+                                        out bool raidIntent, out bool raidable)
+    {
+        raidIntent = false;
+        raidable = false;
+        if (!IsUsable(unit)) return null;
+
+        raidable = CanRaidFrom(unit) && IsEnemyMidRow(unit, pointerRow) && CanMoveTo(unit, pointerRow);
+
+        // 袭扰意图下关掉卡缝补判:敌方中军里的兵会把整条排变成攻击区,而袭扰恰恰要落在这条排上
+        var target = AttackTargetUnderPointer(unit, screenPosition, raidable ? null : pointerRow);
+
+        if (raidable && (target == null || ForceMoveHeld()))
+        {
+            raidIntent = true;
+            return null;
+        }
+
+        return target;
     }
 
     /// <summary>
@@ -560,23 +674,23 @@ public class UnitActionController : MonoBehaviour
         return RectTransformUtility.WorldToScreenPoint(camera, rect.position);
     }
 
-    /// <summary>把单位挪到这条排(和数字键走同一条 MoveUnit)</summary>
-    private void MoveSelectedTo(FieldUnit unit, BattleRow row)
+    /// <summary>
+    /// 把单位挪到这条排(和数字键走同一条 MoveUnit)。
+    /// slotIndex = 插在链上第几位(&lt; 0 = 不挑位置,贴到末尾)。
+    /// </summary>
+    private void MoveSelectedTo(FieldUnit unit, BattleRow row, int slotIndex)
     {
         var board = BattlefieldManager.Instance;
         if (board == null) return;
         if (!IsUsable(unit)) return;
 
-        // 排的归属分敌我,而 MoveUnit 要的是"排类型";由这里统一换算,免得拖到敌方中军时算错
-        if (row.Side != unit.Side && row.RowType != BattleRowType.Front && !unit.IsRaiding)
-        {
-            string why = "只能移动到己方的排（袭扰骑兵才能进敌方中军）";
-            row.FlashInvalid();
-            FloatingTipUI.Show(ScreenPositionOf(unit), why, warning: true);
-            return;
-        }
-
-        if (!board.MoveUnit(unit, row.RowType, out string message))
+        // 直接把"指针底下这条排"交给 MoveUnit,不再折成 BattleRowType ——
+        // 中军有两条(我方 / 敌方)、RowType 都是 Mid,折一次就分不出玩家想进哪一条。
+        // 能不能进(方向、兵种、容量、袭扰)由 BattleRules.CanMoveTo 独家判定,这里不重复判:
+        // 曾经这里有一条"只能移动到己方的排,袭扰骑兵才能进敌方中军"的守卫,
+        // 可袭扰状态恰恰是**进了敌方中军之后**才挂上的(BattleActionExecutor.EnterRaid),
+        // 那条守卫要求的东西只能由它自己拦下的动作产生 —— 袭扰永远做不出来。
+        if (!board.MoveUnit(unit, row, slotIndex, out string message))
         {
             row.FlashInvalid();
             FloatingTipUI.Show(ScreenPositionOf(unit), message, warning: true);
@@ -588,30 +702,21 @@ public class UnitActionController : MonoBehaviour
         AfterAction();
     }
 
-    /// <summary>这个单位现在能不能落到这条排上(移动目标算的是排"类型",不是具体哪条排)</summary>
+    /// <summary>这个单位现在能不能落到这条排上(高亮与松手判定共用,和 MoveUnit 的判定完全一致)</summary>
     private bool CanMoveTo(FieldUnit unit, BattleRow row)
     {
         if (!IsUsable(unit) || row == null) return false;
 
-        // unit.Row 就是"现在在哪条排";sideCarrier 是"会落进哪条排"
-        // —— BattleRules.CanMoveTo 里两者相同就判不合法(没有位移不该收行动力与 CP)
-        var carrier = RowCarrierFor(unit, row.RowType);
-        if (!BattleRules.CanMoveTo(unit, unit.Row, row.RowType, carrier, out _, out bool isRetreat)) return false;
+        // 拖动是"拖到哪条排就进哪条排":落点就是 row 本身,不再换算成 RowType。
+        // unit.Row 就是"现在在哪条排" —— 两者相同由 CanMoveTo 内部判不合法
+        // (没有位移不该收行动力与 CP)。
+        //
+        // ⚠ 容量必须判 row 自己:以前这里落点用 carrier、容量却用 row,
+        //   站共享前军时 carrier 恒为敌方中军,于是**自己的中军也会亮绿**(绿了却放不下)。
+        if (!BattleRules.CanMoveTo(unit, unit.Row, row.RowType, row, out _, out bool isRetreat)) return false;
 
         // 容量:满员的排进不去(撤回不占新位置,不受这条限制)
         return isRetreat || !row.IsUnitCapacityFull;
-    }
-
-    /// <summary>
-    /// 排类型对应的"那条排"。
-    /// 直接问 BattlefieldManager.ResolveMoveRow —— 这里**曾经自己算了一份**,而且算错了:
-    /// 站在共享前军时"中军"指的是**对面的中军**(§7.4 袭扰),那份实现却返回自己的中军,
-    /// 于是玩家把骑兵从共享前军往前拖会被判成"不合法"(拖不过去),AI 却走得过去。
-    /// </summary>
-    private static BattleRow RowCarrierFor(FieldUnit unit, BattleRowType type)
-    {
-        var board = BattlefieldManager.Instance as BattlefieldManager;
-        return board != null ? board.ResolveMoveRowTo(unit, type) : null;
     }
 
     /// <summary>拖动开始时,把所有"能落到"的排标成绿色(§10.2 合法落点高亮)</summary>
@@ -655,7 +760,8 @@ public class UnitActionController : MonoBehaviour
         SetTargetFrameEmphasis(hoveredTarget, false);
         hoveredTarget = null;
 
-        if (dragMarker != null) dragMarker.gameObject.SetActive(false);
+        // 原地晃动要停,而且必须把缩放/旋转还原 —— 补间被 Kill 在半路会留在歪着的状态
+        StopDragWobble();
 
         // 箭头也要收,否则松手之后会留在场上
         HideAttackArrow();
@@ -683,76 +789,119 @@ public class UnitActionController : MonoBehaviour
         pressedUnit = null;
     }
 
-    // ---- 拖动标记:跟着指针的半透明方块 ----
-
-    private void ShowDragMarker(FieldUnit unit)
-    {
-        // 单位可能在两次拖动之间被销毁:标记是挂在画布上的独立物体,父级也可能没了 —— 两种都重建
-        if (dragMarker == null || dragMarker.parent == null) dragMarker = CreateDragMarker();
-        if (dragMarker == null) return;
-
-        var source = RectOf(unit);
-        if (source != null) dragMarker.sizeDelta = new Vector2(source.rect.width, source.rect.height);
-
-        dragMarker.gameObject.SetActive(true);
-        if (dragMarker.parent != null) dragMarker.SetAsLastSibling();
-        SetDragMarkerAlpha(DragMarkerAlpha);
-        MoveDragMarker(Input.mousePosition);
-    }
+    // ---- 拖动:卡牌原地晃一下(不跟手) ----
 
     /// <summary>
-    /// 切换"卡牌跟手"与"攻击指向"两种模式。
-    /// attacking = true:卡牌标记淡到几乎看不见,画箭头指向目标;
-    /// attacking = false:箭头收掉,卡牌标记恢复。
-    /// 用淡入淡出而不是直接开关,是为了拖动中来回划过敌人时不会闪。
+    /// 拖动开始时让被拖的那张卡**在原地晃一下**,然后就不动了。
+    ///
+    /// 【为什么不再跟手】以前有一个"卡牌方框虚影"跟着指针跑,想表达"你正拿着这张牌";
+    ///   可战场上的一次拖动有两个完全不同的结局(打人 / 挪位置),卡牌跟着走会被读成
+    ///   "这一下是把它挪过去",尤其是拖到敌人身上时——那其实是攻击,不该有任何"挪过去"的暗示。
+    ///   现在跟手的只有箭头,卡牌留在原位;真正的位移发生在松手判定成立之后(MoveSelectedTo)。
+    ///
+    /// 【晃哪个】晃 **FieldUnit 所在的槽**(布局格子),不晃卡面:排的 HorizontalLayoutGroup
+    ///   只管位置与尺寸,不管缩放/旋转,所以在这里做 PunchScale/PunchRotation 不会和布局打架。
     /// </summary>
-    private void SetDragMarkerMode(bool attacking)
+    private void BeginDragWobble(FieldUnit unit)
     {
-        SetDragMarkerAlpha(attacking ? DragMarkerAlphaWhileAttacking : DragMarkerAlpha);
-        if (attacking) ShowAttackArrow();
-        else HideAttackArrow();
+        StopDragWobble();
+
+        var rect = RectOf(unit);
+        if (rect == null) return;
+
+        wobbleRect = rect;
+        wobbleBaseScale = rect.localScale;                  // 记下原始值:补间被 Kill 在半路要能还原
+        wobbleBaseRotation = rect.localRotation;
+
+        rect.DOKill();
+        rect.localRotation = wobbleBaseRotation;
+
+        // 幅度很小:是个"我抓住了"的回应,不是动画演出
+        rect.DOPunchScale(wobbleBaseScale * 0.06f, 0.22f, 8, 0.7f).SetUpdate(true);
+        rect.DOPunchRotation(new Vector3(0f, 0f, 2.5f), 0.3f, 10, 0.7f).SetUpdate(true);
     }
 
-    private void SetDragMarkerAlpha(float alpha)
+    /// <summary>停掉晃动并把缩放/旋转还原(补间被 Kill 在半路会留在歪着的状态)</summary>
+    private void StopDragWobble()
     {
-        if (dragMarker == null) return;
-        var image = dragMarker.GetComponent<Image>();
-        if (image == null) return;
+        if (wobbleRect == null) return;
 
-        var color = image.color;
-        if (Mathf.Approximately(color.a, alpha)) return;      // 每帧都会调,值没变就别起补间
-        DOTween.Kill(image);
-        image.DOColor(new Color(color.r, color.g, color.b, alpha), 0.12f).SetUpdate(true);
+        wobbleRect.DOKill();
+        wobbleRect.localScale = wobbleBaseScale;
+        wobbleRect.localRotation = wobbleBaseRotation;
+        wobbleRect = null;
     }
-
-    // ---- 攻击指向箭头 ----
 
     /// <summary>
-    /// 拖动时指针压在能打的敌人身上:从攻击方画一根指向目标的箭头,代替"卡牌跟手"。
-    /// 每次指针移动都重算(起点是攻击方当前位置,单位可能刚被移动过,不能缓存)。
+    /// 选中/取消选中时把「可操作」描边收起来 —— 金色选中框已经在外圈,
+    /// 里面再套一圈绿描边会显得很吵。描边本身由 CardActionOutline 逐帧核对,这里只管"让位"。
+    /// </summary>
+    private static void SetActionOutlineSelected(FieldUnit unit, bool selected)
+    {
+        if (!IsUsable(unit)) return;
+
+        var outline = unit.GetComponentInChildren<CardActionOutline>(true);
+        if (outline != null) outline.SetSelected(selected);
+    }
+
+    // ---- 拖动指向箭头 ----
+
+    /// <summary>
+    /// 拖动时唯一跟手的视觉:一根从**被拖的卡**画出去的箭头。它同时回答两个问题:
+    ///   · 指向哪儿 —— 攻击时指向那张敌人卡(留出 gap,别糊住卡面);移动/袭扰时指向指针(落点是"那条排",没有卡片可吸);
+    ///   · 这一下做什么 —— **颜色**:赤 = 攻击、绿 = 移动/袭扰、灰 = 松手什么都不会发生。
+    ///
+    /// 每次指针移动都重算(起点是单位当前位置,不能缓存)。指针压在敌人身上时优先按攻击算,
+    /// 与 `OnUnitEndDrag` 的"攻击优先"是同一个规则。
+    /// </summary>
+    private void UpdateDragArrow(Vector2 pointerScreen, DragArrowIntent intent)
+    {
+        var fromRect = dragUnit != null ? RectOf(dragUnit) : null;
+        if (fromRect == null) { HideAttackArrow(); return; }
+
+        var fromScreen = (Vector2)ScreenCenterOf(fromRect.position);
+
+        Color color;
+        Vector2 toScreen;
+        float gap;
+
+        if (intent == DragArrowIntent.Attack)
+        {
+            var targetRect = RectOf(hoveredTarget);
+            if (targetRect == null) { HideAttackArrow(); return; }
+
+            toScreen = ScreenCenterOf(targetRect.position);
+            color = AttackArrowColor;
+            gap = AttackArrowHeadGap;
+        }
+        else
+        {
+            toScreen = pointerScreen;
+            color = intent == DragArrowIntent.Move ? MoveArrowColor : IdleArrowColor;
+            gap = MoveArrowHeadGap;
+        }
+
+        ShowDragArrow(fromScreen, toScreen, color, gap);
+    }
+
+    /// <summary>
+    /// 画箭头本体:from → to(都是**屏幕坐标**),箭头尖停在离 to 之前 gap 个画布单位处。
     ///
     /// 【坐标】全程在**箭头父级(根画布)的局部坐标**里算,不要用 RectTransform.position。
     ///   BattleCanvas 是 ScreenSpaceOverlay + CanvasScaler(参考分辨率 1920×1080),这种画布下
     ///   `position` 是屏幕像素,而 sizeDelta/anchoredPosition 是画布单位,两者差一个 scaleFactor。
     ///   在 1080p 全屏时 scaleFactor = 1,两者数值恰好相等 —— 所以只在开发者那块屏幕上看着是对的;
     ///   换 2560×1440(1.333)箭头会整体偏移、间距与长度按比例放大,分辨率再怪一点会飘出画布。
-    ///   同文件的 MoveDragMarker() 一直用的是 ScreenPointToLocalPointInRectangle,这里沿用同一套。
+    ///   同文件的 ScreenPointToLocalPointInRectangle 一直用的是这套换算,这里沿用同一套。
     /// </summary>
-    private void ShowAttackArrow()
+    private void ShowDragArrow(Vector2 fromScreen, Vector2 toScreen, Color color, float gap)
     {
-        var from = RectOf(dragUnit);
-        var to = RectOf(hoveredTarget);
-        if (from == null || to == null) { HideAttackArrow(); return; }
-
         if (!EnsureAttackArrow()) return;
 
         var parent = attackArrowHead.parent as RectTransform;
         if (parent == null || parent != attackArrowShaft.parent) { HideAttackArrow(); return; }
 
-        // 把两端的**屏幕坐标**换到父级局部坐标(和 MoveDragMarker 同一套换算)
         var cam = EventCameraFor(parent);
-        var fromScreen = (Vector2)ScreenCenterOf(from.position);
-        var toScreen = (Vector2)ScreenCenterOf(to.position);
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, fromScreen, cam, out var fromLocal) ||
             !RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, toScreen, cam, out var toLocal))
         {
@@ -767,19 +916,25 @@ public class UnitActionController : MonoBehaviour
         attackArrowHead.SetAsLastSibling();
         attackArrowShaft.SetAsLastSibling();
 
-        // 【方向】从攻击方指向目标,角度由**实际坐标**算出来,不写死"朝上/朝下"。
+        // 颜色每帧写一次没关系(只有两个 Image),但值没变就别写,免得 UI 每帧重建顶点
+        var headImage = attackArrowHead.GetComponent<Image>();
+        if (headImage != null && headImage.color != color) headImage.color = color;
+        var shaftImage = attackArrowShaft.GetComponent<Image>();
+        if (shaftImage != null && shaftImage.color != color) shaftImage.color = color;
+
+        // 【方向】从起点指向终点,角度由**实际坐标**算出来,不写死"朝上/朝下"。
         //   之前我按排的添加顺序推断屏幕上是"我方在上、敌方在下",直接把三角画成朝下,结果反了 ——
-        //   排的上下是由 RowsContainer 的布局决定的,靠猜不靠谱。现在方向永远是"攻击方 → 目标"。
+        //   排的上下是由 RowsContainer 的布局决定的,靠猜不靠谱。现在方向永远是"起点 → 终点"。
         var direction = delta.normalized;
         float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
 
-        // 箭头贴在目标那一侧(离目标中心 AttackArrowHeadGap 个画布单位),别把目标卡面糊住
-        var headLocal = toLocal - direction * AttackArrowHeadGap;
+        // 箭头尖停在离终点 gap 个画布单位处
+        var headLocal = toLocal - direction * gap;
         attackArrowHead.localPosition = headLocal;
         // 贴图默认尖端朝"上"(+Y),所以要把 +Y 转到 direction:角度再减 90°
         attackArrowHead.localRotation = Quaternion.Euler(0f, 0f, angle - 90f);
 
-        // 箭杆从攻击方一直拉到箭头根部,不会戳穿三角
+        // 箭杆从起点一直拉到箭头根部,不会戳穿三角
         var headBase = headLocal + direction * (AttackArrowHeadSize.y * 0.5f - AttackArrowShaftThickness * 0.5f);
         float length = Vector2.Distance(fromLocal, headBase);
         if (length <= AttackArrowShaftMinLength)
@@ -818,7 +973,7 @@ public class UnitActionController : MonoBehaviour
         if (attackArrowHead == null || attackArrowShaft == null) return false;
 
         attackArrowHead.gameObject.SetActive(true);
-        // 箭杆的显隐由 ShowAttackArrow 按实际长度决定,这里不无条件打开
+        // 箭杆的显隐由 ShowDragArrow 按实际长度决定,这里不无条件打开
         return true;
     }
 
@@ -845,7 +1000,7 @@ public class UnitActionController : MonoBehaviour
 
     /// <summary>
     /// 箭头尖的三角:**尖端朝上(+Y)**,底边在下。
-    /// ShowAttackArrow 会把 +Y 旋转到"攻击方 → 目标"的方向,所以这里是中性朝向,不带上下假设。
+    /// ShowDragArrow 会把 +Y 旋转到"攻击方 → 目标"的方向,所以这里是中性朝向,不带上下假设。
     /// 资源只生成一次,之后复用。
     /// </summary>
     private static Sprite EnsureArrowHeadSprite()
@@ -858,7 +1013,7 @@ public class UnitActionController : MonoBehaviour
 
         for (int y = 0; y < h; y++)
         {
-            // y 越大越靠上。**尖端必须在最上(y = h-1)** —— ShowAttackArrow 是按
+            // y 越大越靠上。**尖端必须在最上(y = h-1)** —— ShowDragArrow 是按
             // "贴图尖端朝 +Y"来算旋转的,这里画反了箭头就会指向目标的反方向。
             // t: 1 = 最上(尖端,宽 0),0 = 最下(底边,最宽)
             float t = (float)y / (h - 1);
@@ -887,38 +1042,6 @@ public class UnitActionController : MonoBehaviour
 
         arrowShaftSprite = Sprite.Create(texture, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 100f);
         return arrowShaftSprite;
-    }
-
-    private void MoveDragMarker(Vector2 screenPosition)
-    {
-        if (dragMarker == null || !dragMarker.gameObject.activeSelf) return;
-
-        var parent = dragMarker.parent as RectTransform;
-        if (parent == null) return;
-
-        var cam = EventCameraFor(parent);
-        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, screenPosition, cam, out var local))
-            dragMarker.anchoredPosition = local;
-    }
-
-    private RectTransform CreateDragMarker()
-    {
-        var go = new GameObject("UnitDragMarker", typeof(RectTransform), typeof(Image));
-        var rt = (RectTransform)go.transform;
-        var image = go.GetComponent<Image>();
-
-        image.sprite = CreateFrameSprite();
-        image.type = Image.Type.Sliced;
-        image.color = dragMarkerColor;
-        image.raycastTarget = false;      // 别挡住下面的排,不然拖到自己身上就判定不出来了
-
-        var host = VisualHost();
-        if (host == null) { Destroy(go); return null; }     // 画布没了就别建,建了也没处挂
-        rt.SetParent(host, false);
-        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-        rt.pivot = new Vector2(0.5f, 0.5f);
-        go.SetActive(false);
-        return rt;
     }
 
     private static Camera EventCameraFor(RectTransform rect)
@@ -1020,6 +1143,9 @@ public class UnitActionController : MonoBehaviour
     /// 给"这个单位现在打得到的目标"套红框。
     /// 判定完全走 BattleRules.CanAttack(射程、守护、无敌、压制都在里面),
     /// 所以被守护挡住的单位不会亮框 —— 「为什么点不动」一眼就能看出来。
+    ///
+    /// ⚠ 还要过一遍**付不付得起**:指挥点不足时红框全不亮(和"能操作"绿框是同一个判据)。
+    ///   否则会出现"红框亮着、拖上去却提示指挥点不足"的假可攻击目标。
     /// </summary>
     private void RefreshTargetFrames(FieldUnit attacker)
     {
@@ -1028,6 +1154,12 @@ public class UnitActionController : MonoBehaviour
 
         var board = BattlefieldManager.Instance;
         if (board == null) return;
+
+        if (!board.CanAffordAction(attacker, out string affordReason))
+        {
+            if (debugLog) Debug.Log($"[操作] 「{attacker.DisplayName}」不亮攻击框:{affordReason}");
+            return;
+        }
 
         int used = 0;
         var rows = board.Rows;
@@ -1173,29 +1305,11 @@ public class UnitActionController : MonoBehaviour
         return this != null ? transform as RectTransform : null;
     }
 
-    /// <summary>画一个中空的方框 Sprite(1 像素白框 + 九宫格边框),避免依赖美术资源</summary>
-    private static Sprite CreateFrameSprite()
-    {
-        const int size = 16;
-        const int border = 3;
-
-        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        var clear = new Color(0f, 0f, 0f, 0f);
-        var solid = Color.white;
-
-        for (int y = 0; y < size; y++)
-        {
-            for (int x = 0; x < size; x++)
-            {
-                bool onEdge = x < border || y < border || x >= size - border || y >= size - border;
-                texture.SetPixel(x, y, onEdge ? solid : clear);
-            }
-        }
-        texture.Apply();
-
-        return Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f, 0,
-                             SpriteMeshType.FullRect, new Vector4(border, border, border, border));
-    }
+    /// <summary>
+    /// 选中框 / 目标框用的中空方框 Sprite。实现搬到 `UiFrameSprite` 了:
+    /// 手牌的「可操作」描边也要画同一种框,一份实现两个地方用,免得线宽/圆角慢慢长歪。
+    /// </summary>
+    private static Sprite CreateFrameSprite() => UiFrameSprite.Frame;
 
     /// <summary>
     /// 冒一句飘字(原来这里是一条常驻在屏幕底部、横跨 1400 像素的说明条)。

@@ -366,9 +366,24 @@ public class BattlefieldManager : MonoBehaviour
     public bool MoveUnit(FieldUnit unit, BattleRowType targetType, out string message)
         => actions.MoveUnit(unit, targetType, out message);
 
+    /// <summary>
+    /// 单位移动 —— 鼠标拖动专用:直接把"指针底下那条排"传进去。
+    /// 不折成 BattleRowType 是因为中军有两条(我方 / 敌方)、RowType 都是 Mid,
+    /// 折一次就分不出玩家想进哪一条(§7.4 袭扰 vs 退回自己中军)。
+    /// </summary>
+    /// <param name="slotIndex">插在链上第几位;&lt; 0 表示"不挑位置",贴到链末尾</param>
+    public bool MoveUnit(FieldUnit unit, BattleRow targetRow, int slotIndex, out string message)
+        => actions.MoveUnit(unit, targetRow, slotIndex, out message);
+
     /// <summary>单位攻击(§7.1),玩家点击与 AI 共用</summary>
     public bool AttackUnit(FieldUnit attacker, FieldUnit target, out string message)
         => actions.AttackUnit(attacker, target, out message);
+
+    /// <summary>
+    /// 这个单位现在**付不付得起**一次行动(1 AP + 行动费用 CP)。**只读**,不改任何账。
+    /// UI 的"能操作"描边与真正扣费共用这一份判据 —— 否则会出现"绿框亮着、一动就提示指挥点不足"。
+    /// </summary>
+    public bool CanAffordAction(FieldUnit unit, out string message) => actions.CanAffordAction(unit, out message);
 
     /// <summary>这一方现在能不能行动(轮流回合:只有轮到自己时才能出牌、移动、攻击)</summary>
     public bool IsSideAllowedToAct(BattleSide side) => actions.IsSideAllowedToAct(side);

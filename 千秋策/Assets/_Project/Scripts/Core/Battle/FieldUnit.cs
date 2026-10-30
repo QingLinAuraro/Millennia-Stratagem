@@ -172,6 +172,15 @@ public class FieldUnit : MonoBehaviour
         var hover = cardView != null ? cardView.GetComponent<CardHover>() : null;
         if (hover != null) hover.Bind(this);
 
+        // 卡面按阵营上色(我方青蓝 / 敌方赤):敌方常借我方卡组,插画和兵种可能一模一样,
+        // 攻/血的颜色是战场上"一眼分敌我"最省事的地方。
+        if (cardView != null) cardView.SetSide(side);
+
+        // 「现在能操作」的淡绿描边:战场卡自己按 CanActNow + 是否轮到我方逐帧核对(见那个组件)
+        var outline = cardView != null ? cardView.GetComponent<CardActionOutline>() : null;
+        if (outline == null && cardView != null) outline = cardView.gameObject.AddComponent<CardActionOutline>();
+        if (outline != null) outline.BindUnit(this);
+
         Flush();
     }
 
@@ -346,6 +355,19 @@ public class FieldUnit : MonoBehaviour
         Ap -= count;
         Flush();
         return true;
+    }
+
+    /// <summary>
+    /// 把刚才花掉的行动点退回来(行动"扣了 AP、但没付成 CP / 没落地"时的补偿)。
+    /// 只用于扣费流程里的失败回退 —— 不是给"再来一次"用的,所以不会超过本回合上限。
+    /// </summary>
+    public void RefundActionPoint(int count = 1)
+    {
+        if (!IsUnit || count <= 0) return;
+
+        Ap += count;
+        if (ApMax > 0 && Ap > ApMax) Ap = ApMax;
+        Flush();
     }
 
     /// <summary>把这回合的 AP 直接给满(闪击单位部署当回合立即行动时用)</summary>

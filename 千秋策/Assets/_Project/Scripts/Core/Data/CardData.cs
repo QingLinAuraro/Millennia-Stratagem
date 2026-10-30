@@ -99,3 +99,5 @@ public class CardData : ScriptableObject
     public bool IsUnitCard => cardType == CardType.Unit && unitType != UnitType.Strategy && unitType != UnitType.Counter;
     public bool RequiresTarget => cardType == CardType.Tactic && targetType != TacticTargetType.None;
 }
+
+// 1

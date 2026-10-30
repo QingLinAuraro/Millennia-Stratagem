@@ -70,9 +70,37 @@ public class BattleRow : MonoBehaviour
     private Color originalColor = Color.white;
     private bool cachedColor;
 
+    /// <summary>
+    /// ⚠ 共享前军的这个值是**被迫填的假值**(恒为 Player) —— 前军全场只有一条,它不属于任何一方。
+    /// 判敌我一概用 <see cref="Owner"/>,不要用它。
+    /// 保留它是为了兼容尚未改造完的旧调用点,新代码别再依赖它判阵营。
+    /// </summary>
     public BattleSide Side => side;
     public BattleRowType RowType => rowType;
     public int UnitCapacity => unitCapacity;
+
+    /// <summary>
+    /// 这条排现在归属谁(§2.3 + 前军的动态归属规则)。
+    ///
+    /// · 后军 / 中军:归属由排类型决定,恒定不变 —— 己方两条归我方,敌方两条归敌方。
+    /// · 共享前军:全场只有一条,**归属由场面决定**:
+    ///     · 排里没有活着的兵牌 → 无归属(<c>null</c>),双方都能进;
+    ///     · 有兵牌站上去 → 归那一方,对面进不来(§2.3「只容得下一方的单位」);
+    ///     · 兵牌全部阵亡 → **立刻**回到无归属,谁都能再来抢。
+    ///
+    /// 为什么是**派生属性**而不是一个字段:前军最多 4 个成员,每次遍历的成本可以忽略;
+    /// 反过来若存成字段,就必须保证每一条进出路径都记得更新它,漏一处就是一个静默的错误状态。
+    /// 项目里的 <see cref="HasEnemyRaider"/> 正是那种「字段 + 集中重算」的做法,它的注释里专门写了「别手写」。
+    /// 派生值不会和场面不一致,所以这里选它。
+    ///
+    /// 典型用法(判断 side 能不能进这条排):
+    /// <c>if (row.Owner == null || row.Owner == side) { /* 可以进 */ }</c>
+    ///
+    /// ⚠ 别拿它替换 <c>BattleRules.OnlySideOccupies</c>:那个方法遍历检测的是「混住」,
+    ///   对**敌方中军里的袭扰骑兵**会返回 false,而本属性对中军取的是静态归属、恒为该方 ——
+    ///   两者语义不同,必须并存。
+    /// </summary>
+    public BattleSide? Owner => RowType == BattleRowType.Front ? OccupantSide() : side;
 
     /// <summary>排里的兵牌数(建筑锚点不算单位容量,§2.3:大营占容量但不占那 4 个单位容量)</summary>
     public int UnitCount
@@ -120,10 +148,40 @@ public class BattleRow : MonoBehaviour
         return false;
     }
 
-    /// <summary>排的中文名,飘字和日志用</summary>
+    /// <summary>
+    /// 共享前军现在被谁占着:链上**第一个活着的兵牌**属于哪一方,就归哪一方;没人就是 null(无归属)。
+    ///
+    /// 只有共享前军会走到这里(见 <see cref="Owner"/>)—— 其余四条排的归属由排类型定死,不需要看场面。
+    ///
+    /// 三个边界按策划案定死了,改之前先确认:
+    ///   · **建筑不算**:前军本来就没有建筑锚点,而且建筑不会移动、不会造成"混住";
+    ///   · **阵亡的不算**:兵牌全部阵亡后立刻回到无归属(清掉就能再抢),不是等到回合结束;
+    ///   · **不存在混占**:规则上排里只容得下一方的单位(进之前就被 BattleRules 拦了),
+    ///     所以取第一个活着的兵牌的阵营就够了,不用处理"两边都有人"的情况。
+    /// </summary>
+    private BattleSide? OccupantSide()
+    {
+        for (int i = 0; i < members.Count; i++)
+        {
+            var unit = members[i];
+            if (unit == null || !unit.IsAlive || unit.IsBuilding) continue;
+            return unit.Side;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 排的中文名,飘字和日志用。
+    ///
+    /// 共享前军**不属于任何一方**,所以名字里不冠"己方 / 敌方" —— 叫成"己方前军"会让人误以为
+    /// 那条排是我方私有的,而它其实是双方抢的那一条(现在归谁看 <see cref="Owner"/>)。
+    /// 飘字里出现「共享前军还驻着敌方单位」才说得通。
+    /// </summary>
     public string DisplayName =>
-        (side == BattleSide.Player ? "己方" : "敌方") +
-        (rowType == BattleRowType.Back ? "后军" : rowType == BattleRowType.Mid ? "中军" : "前军");
+        rowType == BattleRowType.Front
+            ? "共享前军"
+            : (side == BattleSide.Player ? "己方" : "敌方") +
+              (rowType == BattleRowType.Back ? "后军" : rowType == BattleRowType.Mid ? "中军" : "前军");
 
     private void Awake() => CacheBackground();
 

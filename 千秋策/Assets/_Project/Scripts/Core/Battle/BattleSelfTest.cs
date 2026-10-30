@@ -248,11 +248,12 @@ public class BattleSelfTest : MonoBehaviour
             }
         }
 
-        // ---------- 5b. 攻击扣费 / 缺费回滚(§2.5:不能"只扣费用、没有伤害") ----------
+        // ---------- 5b. 攻击扣费 / 缺费时整体不生效(§2.5:费用或行动力不满足都不能行动) ----------
         var cpCtrl = CommandPointController.Instance;
         if (cpCtrl != null && mine != null && his != null)
         {
             cpCtrl.IncreaseCpMax(20);
+            cpCtrl.RefundCp(cpCtrl.CpMax);      // 先把当前 CP 补满:这一段验的是"扣费",不是"有没有钱"
             mine.GrantFullAp();
 
             int cpBefore = cpCtrl.Cp;
@@ -281,6 +282,89 @@ public class BattleSelfTest : MonoBehaviour
             Check(!ok2, "指挥点不足时攻击被拒", "居然打出去了");
             Check(his.Hp == hpBefore2, "被拒的攻击没有造成任何伤害", $"HP {hpBefore2} → {his.Hp}");
             Check(mine.Ap == apBefore2, "被拒的攻击没有扣行动力", $"AP {apBefore2} → {mine.Ap}");
+
+            // UI 的"能不能操作"也靠这一份只读判定,不能只拦结算、却让绿框照旧亮着
+            bool affordable = board.CanAffordAction(mine, out string affordReason);
+            Check(!affordable, "指挥点不足时 CanAffordAction 返回 false（绿框不会骗人）",
+                  $"仍然报告付得起:{affordReason ?? "（无理由）"}");
+            Log($"付不起的理由:{affordReason}");
+
+            // ★ 最狠的一条:这一下**本来能打死人**。
+            //   旧顺序是「先结算 → 再扣费」:目标先被 KillUnit 销毁(卡没了),扣费失败之后
+            //   回滚只能对着一个已销毁对象写 HP —— 卡永远消失、伤害却已经生效。
+            //   现在扣费在结算之前,这一下根本打不出去,目标必须原封不动。
+            var doomed = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.EnemyMid, BattleSide.Enemy, 0);
+            if (doomed != null)
+            {
+                doomed.SetHp(1);        // 一下就能打死:旧代码会把它打没
+
+                bool lethal = board.AttackUnit(mine, doomed, out string lethalReason);
+
+                Check(!lethal, "指挥点不足时，连能打死人的攻击也打不出去", "居然打出去了");
+                Check(doomed != null && doomed.IsAlive && doomed.Hp == 1,
+                      "被拒的攻击没有把目标打死（卡还在场上）",
+                      doomed == null ? "目标卡被这一下打没了" : $"目标 HP {doomed.Hp}（应为 1）,存活 {doomed.IsAlive}");
+
+                if (doomed != null)
+                {
+                    doomed.Row?.RemoveUnit(doomed);
+                    Destroy(doomed.gameObject);
+                }
+            }
+
+            // 把 CP 还回去:后面几段(5c/5d)要验的是"方向/袭扰",别让它们因为没钱而以另一种理由被拒
+            if (drain > 0) cpCtrl.RefundCp(drain);
+        }
+
+        // ---------- 5b2. 弓兵:付费之后结算不能再判 AP ----------
+        // 坑是怎么来的:攻击改成「先付款 → 再结算」之后,付款已经把 AP 扣掉了;
+        // 而 `BattleSettlement.Attack` 内部又复查了一次 `CanAttack`(它含 AP 判定)。
+        // 于是 **1 AP 的兵(弓兵/步兵)** 付完费 AP = 0 → 被自己判成「行动力已耗尽」,
+        // 表现为"弓兵明明在射程内,却说费用/行动力不足";骑兵 2 AP 付完还剩 1,看不出来。
+        // 修法:结算层改用 `BattleRules.CanAttackTarget`(不含 AP/压制/刚部署)。
+        {
+            var archerCard = FindArcherCard();
+            var archer = archerCard != null
+                ? board.SpawnUnitForDebug(archerCard, board.PlayerFront, BattleSide.Player, 0)
+                : null;
+            var farTarget = archer != null
+                ? board.SpawnUnitForDebug(FindMeleeUnitCard(), board.EnemyBack, BattleSide.Enemy, 0)
+                : null;
+
+            if (archer != null && farTarget != null)
+            {
+                cpCtrl?.RefundCp(cpCtrl.CpMax);      // 这一段要验的是"结算别判 AP",得先付得起
+                archer.GrantFullAp();
+
+                Check(archer.Ap == 1, "弓兵只有 1 点行动力（这个 bug 只在 1 AP 的单位上暴露）",
+                      $"实际 AP {archer.Ap}/{archer.ApMax}");
+
+                bool inRange = BattleRules.CanAttack(archer, farTarget, out string rangeReason);
+                Check(inRange, "弓兵（射程 2）从前军能打到敌方后军的目标", rangeReason ?? "打不到");
+
+                if (inRange)
+                {
+                    int apBefore = archer.Ap;
+                    int hpBefore = farTarget.Hp;
+
+                    bool ok = board.AttackUnit(archer, farTarget, out string attackReason);
+
+                    Check(ok, "弓兵的攻击能正常结算（付完费后不会被误判「行动力已耗尽」）",
+                          attackReason ?? "被拒");
+                    Check(farTarget == null || farTarget.Hp < hpBefore, "弓兵的攻击确实造成了伤害",
+                          farTarget == null ? "目标没了" : $"HP 还是 {farTarget.Hp}");
+                    Check(archer.Ap == apBefore - 1, "弓兵的攻击扣了 1 点行动力",
+                          $"AP {apBefore} → {archer.Ap}");
+                }
+
+                if (archer.Row != null) archer.Row.RemoveUnit(archer);
+                Destroy(archer.gameObject);
+                if (farTarget != null && farTarget.Row != null)
+                {
+                    farTarget.Row.RemoveUnit(farTarget);
+                    Destroy(farTarget.gameObject);
+                }
+            }
         }
 
         // ---------- 5d. 方向硬闸门(§2.3:除袭扰撤回外,任何单位都不许朝己方后排走) ----------
@@ -381,11 +465,11 @@ public class BattleSelfTest : MonoBehaviour
                     int[,] expected =
                     {
                         // 目标:  敌方后军 敌方中军 共享前军(敌) 我方中军 我方后军
-                        {         0,        1,       2,       3,       4 },   // 攻击者 = 我方后军
-                        {        -1,        0,       1,       2,       3 },   // 攻击者 = 我方中军
-                        {        -2,       -1,       0,       1,       2 },   // 攻击者 = 我方单位站共享前军
-                        {        -3,       -2,       1,       0,       1 },   // 攻击者 = 敌方中军
-                        {        -4,       -3,       2,       1,       0 },   // 攻击者 = 敌方后军
+                        {         4,        3,       2,       1,       0 },   // 攻击者 = 我方后军
+                        {         3,        2,       1,       0,      -1 },   // 攻击者 = 我方中军
+                        {         2,        1,       0,      -1,      -2 },   // 攻击者 = 我方单位站共享前军
+                        {        -1,        0,       1,       2,       3 },   // 攻击者 = 敌方中军(从敌方立场看,自己后军才是 0)
+                        {         0,        1,       2,       3,       4 },   // 攻击者 = 敌方后军
                     };
 
                     var attackerRows = new[]
@@ -435,9 +519,19 @@ public class BattleSelfTest : MonoBehaviour
                       $"算出 {playerFromFrontToEnemyMid} —— 照排的 Side 取号会算成 -1,桥上的人反而打不到对面中军");
 
                 int enemyMidToMyMid = BattleRules.ForwardDistance(BattleSide.Enemy, board.EnemyMid, board.PlayerMid);
-                Check(enemyMidToMyMid == 0,
-                      "敌方中军 → 我方中军 的排距是 0（两条中军同档,中间隔着一整条前军）",
+                Check(enemyMidToMyMid == 2,
+                      "敌方中军 → 我方中军 的排距是 2（中间隔着整条共享前军：近战够不到大营,弓/器射程 2 刚好）",
                       $"算出 {enemyMidToMyMid} —— 算成 1 的话敌人站在自己中军就能直接够到我方中军和大营");
+
+                // ---- 袭扰骑兵:我方单位站在**敌方中军**上 ----
+                // 这是"骑兵冲进去之后拆不动后军建筑"的正面回归。攻击者是 Player 阵营,
+                // 但物理上站在敌方中军那条排上:按**具体排**取号是第 3 位,敌方后军第 4 位 → 排距 1。
+                // 曾经这里只拿 RowType 去查 RowRank(Player, Mid) = 1(自家中军),于是算出 4 - 1 = 3,
+                // 近战射程 1 直接判「目标超出射程」—— 后军的军械库/粮草永远点不动。
+                int raiderToHisBack = BattleRules.ForwardDistance(BattleSide.Player, board.EnemyMid, board.EnemyBack);
+                Check(raiderToHisBack == 1,
+                      "袭扰骑兵站敌方中军 → 敌方后军 的排距是 +1（射程 1 排正好够拆后军建筑）",
+                      $"算出 {raiderToHisBack} —— 按 RowType 取号会算成 3,袭扰骑兵就永远打不动后军建筑");
 
                 int playerToFront = BattleRules.ForwardDistance(BattleSide.Player, board.PlayerMid, board.PlayerFront);
                 Check(playerToFront == 1, "我方中军 → 共享前军 的排距也是 +1（两边对称）",
@@ -619,6 +713,185 @@ public class BattleSelfTest : MonoBehaviour
             }
         }
 
+        // ---------- 5c. 鼠标拖动那条路:直接把"指针底下那条排"传给 MoveUnit ----------
+        // 拖动**不能**折成 BattleRowType(中军有两条、RowType 都是 Mid),所以走的是另一个重载。
+        // 这里验的是"传具体排"时,方向闸门仍然关得住跨阵营、跨两排的错位 ——
+        // 这两种输入只有鼠标拖动会产生(键盘 / AI 给的是 RowType,落点是 ResolveMoveRowTo 推的)。
+        {
+            var front = board.PlayerFront;
+            ClearRowForTest(front);
+
+            // ① 骑兵站共享前军,拖到敌方中军的空处 = 袭扰
+            var cavalry = SpawnCavalryForTest(board);
+            if (cavalry != null && board.EnemyMid != null && !board.EnemyMid.IsUnitCapacityFull)
+            {
+                cavalry.GrantFullAp();
+                board.MoveUnit(cavalry, BattleRowType.Front, out _);
+
+                cavalry.GrantFullAp();
+                int apBefore = cavalry.Ap;
+                bool raided = board.MoveUnit(cavalry, board.EnemyMid, 0, out string raidReason);
+                Check(raided && cavalry.Row == board.EnemyMid,
+                      "拖动:骑兵拖到敌方中军能袭扰",
+                      raidReason ?? "移动被拒");
+                Check(cavalry.IsRaiding, "拖动进敌方中军也挂上袭扰状态", "IsRaiding 还是 false");
+                Check(cavalry.Ap < apBefore, "袭扰照常扣行动力", $"AP {apBefore} → {cavalry.Ap}");
+                Check(board.EnemyMid.IndexOf(cavalry) == 0,
+                      "拖动落位:slotIndex 生效(指定插在链首)",
+                      $"实际下标 {board.EnemyMid.IndexOf(cavalry)}");
+
+                if (cavalry.Row != null) cavalry.Row.RemoveUnit(cavalry);
+                Destroy(cavalry.gameObject);
+            }
+
+            // ② 站共享前军的兵拖到**自己的**中军 = 后退,必须被拒(前军是单向的)
+            var grunt = board.SpawnUnitForDebug(FindMeleeUnitCard(), front, BattleSide.Player, 0);
+            if (grunt != null)
+            {
+                grunt.GrantFullAp();
+                int apGrunt = grunt.Ap;
+                bool wrongWay = board.MoveUnit(grunt, board.PlayerMid, 0, out string wrongReason);
+                Check(!wrongWay && grunt.Row == front,
+                      "拖动:站前军的兵拖到自己中军被拒(前军进去了就回不来)",
+                      $"居然过去了(理由:{wrongReason ?? "无"})");
+                Check(grunt.Ap == apGrunt, "被拒的拖动没有扣行动力", $"AP {apGrunt} → {grunt.Ap}");
+
+                grunt.Row?.RemoveUnit(grunt);
+                Destroy(grunt.gameObject);
+            }
+
+            // ③ 后军的兵直接拖到**敌方**中军 = 一次跨两条排,必须被拒
+            var backUnit = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.PlayerBack, BattleSide.Player, 0);
+            if (backUnit != null)
+            {
+                backUnit.GrantFullAp();
+                bool jumped = board.MoveUnit(backUnit, board.EnemyMid, 0, out string jumpReason);
+                Check(!jumped && backUnit.Row == board.PlayerBack,
+                      "拖动:后军的兵拖到敌方中军被拒(不能一次跨两条排)",
+                      $"居然过去了(理由:{jumpReason ?? "无"})");
+
+                backUnit.Row?.RemoveUnit(backUnit);
+                Destroy(backUnit.gameObject);
+            }
+        }
+
+        // ---------- 5d. 袭扰骑兵在敌方中军能做什么(§7.4):拆后军建筑 + 撤回前军 ----------
+        // 这两条是玩家最常报"做不到"的两件事,而且都不走"往前一步"那条路:
+        //   · 攻击:它站在敌方中军,目标是**再往前一排**的敌方后军建筑(射程 1 排刚好够);
+        //   · 撤回:唯一允许反向的一步,而且**必须是隔了一个回合之后**才放开(袭扰代价要先结算)。
+        // 所以这里单独把两件事在真场景里跑一遍 —— 规则层任何一处方向/距离算错,这里都会红。
+        //
+        // ⚠ 这里曾经整段都是绿的、游戏里却打不动后军建筑:因为当时排距对"攻击者那条排"只按 RowType 取号,
+        //   站在敌方中军的骑兵被当成站在自家中军(第 1 位),敌方后军(第 4 位)算出排距 3 —— 测试也跟着一起错。
+        //   现在矩阵与这里的断言都按"具体那条排"取号,再错就会红。
+        {
+            var front = board.PlayerFront;
+            ClearRowForTest(front);
+
+            // 敌方后军建筑(军械库 / 粮草;大营在中军,袭扰骑兵打不到它)
+            var raidTarget = board.FindBuilding(BattleSide.Enemy, BattleRules.GranaryName)
+                             ?? board.FindBuilding(BattleSide.Enemy, BattleRules.ArsenalName);
+
+            var raider = SpawnCavalryForTest(board);
+            Check(raider != null, "卡池里能找到骑兵牌(袭扰自检)", "找不到任何 unitType = Cavalry 的兵牌");
+
+            if (raider != null && board.EnemyMid != null && raidTarget != null)
+            {
+                raider.GrantFullAp();
+                board.MoveUnit(raider, BattleRowType.Front, out _);
+
+                raider.GrantFullAp();
+                bool raided = board.MoveUnit(raider, board.EnemyMid, 0, out string raidReason);
+                Check(raided && raider.Row == board.EnemyMid && raider.IsRaiding,
+                      "袭扰自检:骑兵先冲进敌方中军", raidReason ?? $"现在在 {raider.Row?.DisplayName}");
+
+                if (raided)
+                {
+                    // ---- ① 站在敌方中军的袭扰骑兵,能拆敌方后军建筑 ----
+                    Check(BattleRules.AttackRowOf(raider) == board.EnemyMid,
+                          "袭扰骑兵的攻击起点就是它物理上站着的敌方中军",
+                          $"AttackRowOf 给的是 {BattleRules.AttackRowOf(raider)?.DisplayName}");
+
+                    int raidDistance = BattleRules.ForwardDistance(raider.Side, BattleRules.AttackRowOf(raider), raidTarget.Row);
+                    Check(raidDistance == 1, "袭扰骑兵到敌方后军建筑的排距是 1（射程 1 排够得到）",
+                          $"实际排距 {raidDistance} —— 按 RowType 取号会算成 3,后军建筑就永远打不动");
+
+                    raider.GrantFullAp();
+                    bool canHitBack = BattleRules.CanAttack(raider, raidTarget, out string raidHitReason);
+                    Check(canHitBack, $"袭扰骑兵能攻击敌方后军建筑「{raidTarget.DisplayName}」", raidHitReason ?? "打不到");
+
+                    if (canHitBack)
+                    {
+                        int hpBefore = raidTarget.Hp;
+                        bool dealt = BattleSettlement.Attack(raider, raidTarget, out string raidSettleReason);
+                        Check(dealt, "袭扰骑兵拆建筑的结算成功", raidSettleReason ?? "结算被拒");
+                        Check(raidTarget.Hp < hpBefore, "敌方后军建筑掉了血",
+                              $"HP {hpBefore} → {raidTarget.Hp}（攻击没落到建筑上）");
+                    }
+
+                    // ---- ①b 边界:袭扰骑兵只拆**建筑**,后军里的兵和大营都不许打(§7.4) ----
+                    // 这条常被当成 bug 报上来("后军的单位也打不动"),记在这里当预期行为。
+                    raider.GrantFullAp();       // 上面拆建筑可能已经把 AP 花掉了,边界检查要能走到射程那一条
+                    var hisCamp = BattleSettlement.FindCamp(BattleSide.Enemy);
+                    if (hisCamp != null)
+                    {
+                        Check(!BattleRules.CanAttack(raider, hisCamp, out string campReason),
+                              "袭扰骑兵打不到敌方大营（大营在中军,不是后军建筑）",
+                              "居然能打大营 —— 袭扰限制没生效");
+                        Log($"打大营被拒的理由:{campReason}");
+                    }
+
+                    if (board.EnemyBack != null && !board.EnemyBack.IsUnitCapacityFull)
+                    {
+                        var hisBackUnit = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.EnemyBack, BattleSide.Enemy, 0);
+                        if (hisBackUnit != null)
+                        {
+                            Check(!BattleRules.CanAttack(raider, hisBackUnit, out string backUnitReason),
+                                  "袭扰骑兵打不到敌方后军里的兵（袭扰只能拆建筑）",
+                                  "居然能打后军的单位 —— §7.4 的「不能攻击任何单位」没生效");
+                            Log($"打后军单位被拒的理由:{backUnitReason}");
+
+                            hisBackUnit.Row?.RemoveUnit(hisBackUnit);
+                            Destroy(hisBackUnit.gameObject);
+                        }
+                    }
+
+                    // ---- ② 隔一个回合之后,袭扰骑兵能从敌方中军撤回共享前军 ----
+                    // 先验"刚冲进去的那个回合不许撤回"的另一面:推一格之后必须放行。
+                    AdvanceRoundForTest();
+                    for (int i = 0; i < 2; i++) raider.GrantFullAp();   // 撤回要 AP,而上面拆建筑已经花掉一次了
+
+                    Check(BattleRules.CanMoveTo(raider, raider.Row, BattleRowType.Front, front,
+                                                out string retreatReason, out bool isRetreat) && isRetreat,
+                          "袭扰骑兵隔一个回合后能撤回共享前军(判定放行,且标成后撤)",
+                          retreatReason ?? "判定没放行");
+
+                    int apBeforeRetreat = raider.Ap;
+                    bool retreat = board.MoveUnit(raider, BattleRowType.Front, out string retreatMoveReason);
+                    Check(retreat && raider.Row == front,
+                          "袭扰骑兵真的撤回共享前军了", retreatMoveReason ?? $"现在在 {raider.Row?.DisplayName}");
+                    Check(!raider.IsRaiding, "撤回后袭扰状态解除", "IsRaiding 还是 true");
+                    Check(raider.Ap < apBeforeRetreat, "撤回照常扣行动力", $"AP {apBeforeRetreat} → {raider.Ap}");
+
+                    // 撤回之后它只是普通骑兵:再打那个后军建筑应该够不着了(隔着敌方中军)
+                    Check(!BattleRules.CanAttack(raider, raidTarget, out _),
+                          "撤回后不再是袭扰状态,够不到敌方后军建筑了",
+                          "撤回后仍然能打后军建筑（袭扰限制没被清掉）");
+                }
+
+                // 自检把敌方后军建筑打残/打毁了(5 HP,骑兵一两下就能拆掉):修回去 ——
+                // 后面的 6 / 6c / 7 段还要用这座建筑,而且"被摧毁"会真的给它主人挂 Debuff。
+                RepairForTest(raidTarget);
+
+                raider.Row?.RemoveUnit(raider);
+                Destroy(raider.gameObject);
+            }
+            else
+            {
+                Check(false, "袭扰骑兵进出敌方中军自检", "造不出骑兵,或找不到敌方后军建筑 / 敌方中军");
+            }
+        }
+
         // ---------- 6. 建筑血量绑定(护甲不减免、角标文本要跟着变) ----------
         var enemyBuilding = board.FindBuilding(BattleSide.Enemy, BattleRules.GranaryName)
                             ?? board.FindBuilding(BattleSide.Enemy, BattleRules.ArsenalName)
@@ -653,6 +926,10 @@ public class BattleSelfTest : MonoBehaviour
             {
                 Check(false, "建筑受击检查", "造不出测试单位,或没法把单位摆到建筑旁边");
             }
+
+            // 这一刀可能把 5 HP 的后军建筑打空(=真被摧毁、真挂 Debuff):
+            // 修回去再往下走,免得 6b 的 AI 检查拿到一个被削了 CP / ATK 的对手。
+            RepairForTest(enemyBuilding);
         }
         else
         {
@@ -752,6 +1029,118 @@ public class BattleSelfTest : MonoBehaviour
             Check(false, "AI 进攻能力检查", "战场上没有 EnemyAI 组件");
         }
 
+        // ---------- 6c. 建筑被毁的 Debuff 落在**建筑主人**身上(§2.3) ----------
+        // 这里曾经是最荒唐的一条:玩家拆掉敌方粮草/军械库,挨罚的却是自己 ——
+        // CP 上限 -2、全场兵牌 ATK -1,等于"打得越好越挨罚"。
+        // 受害方必须是 `building.Side`;而且判"哪些兵牌吃这一刀"只能看单位自己的 Side,
+        // 不能看 `row.Side` —— 共享前军的 row.Side 恒为 Player,袭扰骑兵更是站在对面中军上。
+        {
+            var cpForDebuff = CommandPointController.Instance;
+            var enemyDeck = EnemyDeckController.Instance;
+
+            // 先把四座建筑恢复成"满血、非废墟":前面的段落可能已经把某座打残了。
+            // 只有原本就是废墟的才走"修回来"那条(会撤 Debuff),不然会凭空多还一份上限/攻击力。
+            RepairForTest(board.FindBuilding(BattleSide.Player, BattleRules.GranaryName));
+            RepairForTest(board.FindBuilding(BattleSide.Enemy, BattleRules.GranaryName));
+            RepairForTest(board.FindBuilding(BattleSide.Player, BattleRules.ArsenalName));
+            RepairForTest(board.FindBuilding(BattleSide.Enemy, BattleRules.ArsenalName));
+
+            var myGranary = board.FindBuilding(BattleSide.Player, BattleRules.GranaryName);
+            var hisGranary = board.FindBuilding(BattleSide.Enemy, BattleRules.GranaryName);
+            var myArsenal = board.FindBuilding(BattleSide.Player, BattleRules.ArsenalName);
+            var hisArsenal = board.FindBuilding(BattleSide.Enemy, BattleRules.ArsenalName);
+
+            if (cpForDebuff != null && enemyDeck != null && myGranary != null && hisGranary != null)
+            {
+                int myCpBefore = cpForDebuff.CpMax;
+                int hisCpBefore = enemyDeck.CpMax;
+
+                // ① 拆敌方粮草:只有敌方上限降,我方一分不动(用户报的就是这一条)
+                DestroyForTest(hisGranary);
+                Check(cpForDebuff.CpMax == myCpBefore,
+                      "拆掉敌方粮草,我方 CP 上限不受影响",
+                      $"我方上限 {myCpBefore} → {cpForDebuff.CpMax} —— Debuff 挂到了拆建筑的那一方身上");
+                Check(enemyDeck.CpMax == hisCpBefore - 2,
+                      "拆掉敌方粮草,敌方 CP 上限 -2",
+                      $"敌方上限 {hisCpBefore} → {enemyDeck.CpMax},预期 {hisCpBefore - 2}");
+
+                RepairForTest(hisGranary);
+                Check(enemyDeck.CpMax == hisCpBefore, "修好敌方粮草,敌方 CP 上限还原",
+                      $"敌方上限 {enemyDeck.CpMax},预期 {hisCpBefore}");
+
+                // ② 拆我方粮草:这回该我方降(双方对称,不是"只看玩家")
+                DestroyForTest(myGranary);
+                Check(cpForDebuff.CpMax == myCpBefore - 2,
+                      "我方粮草被毁,我方 CP 上限 -2",
+                      $"我方上限 {myCpBefore} → {cpForDebuff.CpMax},预期 {myCpBefore - 2}");
+
+                RepairForTest(myGranary);
+                Check(cpForDebuff.CpMax == myCpBefore, "修好我方粮草,我方 CP 上限还原",
+                      $"我方上限 {cpForDebuff.CpMax},预期 {myCpBefore}");
+            }
+            else
+            {
+                Check(false, "建筑 Debuff 自检（粮草）", "找不到 CP 控制器或双方的粮草");
+            }
+
+            // ③ 军械库:用两个 ATK > 0 的探针单位量增量。
+            //    敌方探针故意摆在**我方中军**上(袭扰骑兵的位置):照 row.Side 判的话它会被
+            //    我方军械库的 -1 一起扣掉,而真正该扣的我方兵反而漏掉。
+            if (myArsenal != null && hisArsenal != null)
+            {
+                // 先把可能残留的惩罚清干净,增量才可预期(军械库惩罚只叠一层,残留会让 Add 直接返回)
+                board.RemoveArsenalPenalty(BattleSide.Player);
+                board.RemoveArsenalPenalty(BattleSide.Enemy);
+
+                var probeMyUnit = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.PlayerMid, BattleSide.Player, 0);
+                var probeHisUnit = board.SpawnUnitForDebug(FindMeleeUnitCard(), board.PlayerMid, BattleSide.Enemy, 0);
+
+                if (probeMyUnit != null && probeHisUnit != null && probeMyUnit.Atk > 0 && probeHisUnit.Atk > 0)
+                {
+                    int myAtkBefore = probeMyUnit.Atk;
+                    int hisAtkBefore = probeHisUnit.Atk;
+
+                    // 拆敌方军械库 → 只有敌方掉
+                    DestroyForTest(hisArsenal);
+                    Check(probeMyUnit.Atk == myAtkBefore,
+                          "拆掉敌方军械库,我方兵牌攻击力不变",
+                          $"我方 {myAtkBefore} → {probeMyUnit.Atk} —— Debuff 挂到了拆建筑的那一方身上");
+                    Check(probeHisUnit.Atk == hisAtkBefore - 1,
+                          "拆掉敌方军械库,敌方兵牌 ATK -1",
+                          $"敌方 {hisAtkBefore} → {probeHisUnit.Atk},预期 {hisAtkBefore - 1}");
+
+                    RepairForTest(hisArsenal);
+                    Check(probeHisUnit.Atk == hisAtkBefore, "修好敌方军械库,敌方攻击力还原",
+                          $"敌方 {probeHisUnit.Atk},预期 {hisAtkBefore}");
+
+                    // 拆我方军械库 → 只有我方掉;摆在我方中军的敌方探针不该被扣
+                    DestroyForTest(myArsenal);
+                    Check(probeMyUnit.Atk == myAtkBefore - 1,
+                          "我方军械库被毁,我方兵牌 ATK -1",
+                          $"我方 {myAtkBefore} → {probeMyUnit.Atk},预期 {myAtkBefore - 1}");
+                    Check(probeHisUnit.Atk == hisAtkBefore,
+                          "我方军械库被毁不影响站在我方中军的敌方兵牌（判据是单位自己的 Side）",
+                          $"敌方 {hisAtkBefore} → {probeHisUnit.Atk} —— 用排的阵营判定会把这一刀扣错人");
+
+                    RepairForTest(myArsenal);
+                    Check(probeMyUnit.Atk == myAtkBefore, "修好我方军械库,我方攻击力还原",
+                          $"我方 {probeMyUnit.Atk},预期 {myAtkBefore}");
+                }
+                else
+                {
+                    Check(false, "建筑 Debuff 自检（军械库）", "造不出 ATK > 0 的探针单位");
+                }
+
+                // 收走探针,别让它们影响后面的胜负检查
+                foreach (var probe in new[] { probeMyUnit, probeHisUnit })
+                    if (probe != null) { if (probe.Row != null) probe.Row.RemoveUnit(probe); Destroy(probe.gameObject); }
+            }
+            else
+            {
+                Check(false, "建筑 Debuff 自检（军械库）", "找不到双方的军械库");
+            }
+        }
+
         // ---------- 7. 胜负与广播(§8.2) ----------
         var endedWith = new List<BattleSide>();     // 用 List 接:匿名方法不能给捕获的局部变量赋值
         System.Action<BattleSide, string> onEnded = (w, reason) => endedWith.Add(w);
@@ -841,13 +1230,29 @@ public class BattleSelfTest : MonoBehaviour
     }
 
     /// <summary>从卡池里挑一张骑兵牌(§7.4 袭扰只有骑兵能做)</summary>
-    private static CardData FindCavalryCard()
-    {
+    private static CardData FindCavalryCard()    {
         var all = Resources.FindObjectsOfTypeAll<CardData>();
         for (int i = 0; i < all.Length; i++)
         {
             var card = all[i];
             if (card != null && card.IsUnitCard && card.unitType == UnitType.Cavalry) return card;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 从卡池里挑一张**只有 1 AP** 的弓兵牌(射程 2)。
+    /// 必须卡死 1 AP:那个"付费后结算又判 AP"的 bug 只在 1 AP 的单位上暴露
+    /// (2 AP 的兵付完还剩 1 点,`CanAttack` 照样放行)。
+    /// </summary>
+    private static CardData FindArcherCard()
+    {
+        var all = Resources.FindObjectsOfTypeAll<CardData>();
+        for (int i = 0; i < all.Length; i++)
+        {
+            var card = all[i];
+            if (card == null || !card.IsUnitCard || card.unitType != UnitType.Archer) continue;
+            if (BattleRules.ActionPointsOf(card) == 1) return card;
         }
         return null;
     }
@@ -908,6 +1313,33 @@ public class BattleSelfTest : MonoBehaviour
             row.RemoveUnit(unit);
             Destroy(unit.gameObject);
         }
+    }
+
+    /// <summary>
+    /// 自检专用:把一座建筑打空(=被摧毁),走的是**真的**摧毁结算 `KillUnit → OnBuildingDestroyed`。
+    /// 已经是废墟就直接跳过 —— 再打一次不会重复挂 Debuff,自检的增量断言会被带偏。
+    /// </summary>
+    private static void DestroyForTest(FieldUnit building)
+    {
+        if (building == null || !building.IsBuilding || !building.IsAlive) return;
+
+        building.SetHp(0);
+        BattleSettlement.KillUnit(building);
+    }
+
+    /// <summary>
+    /// 自检专用:把一座建筑恢复成"满血、非废墟"。
+    /// 只有**原本就是废墟**的才调 `OnBuildingRepaired` 撤 Debuff —— 对活着的建筑凭空补一份
+    /// CP 上限 / 攻击力会让后面的增量断言失真。
+    /// </summary>
+    private static void RepairForTest(FieldUnit building)
+    {
+        if (building == null || !building.IsBuilding || building.IsCamp) return;
+
+        bool wasWrecked = !building.IsAlive;
+        if (wasWrecked) building.ClearWrecked();
+        building.SetHp(building.MaxHp);
+        if (wasWrecked) BattleSettlement.OnBuildingRepaired(building);
     }
 
     /// <summary>在指定方的中军摆一个测试单位(调试接口,不扣费),用来验移动与攻击</summary>

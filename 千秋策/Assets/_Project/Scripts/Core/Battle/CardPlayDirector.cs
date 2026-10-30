@@ -215,13 +215,22 @@ public class CardPlayDirector
         var caster = new CardEffectResolver.Caster(BattleSide.Player);
 
         // §7.2.1 顺序:先判效果能不能落地,再扣费、再让牌退场 —— 顺序反了就会出现"费扣了、牌没了、效果空放"
+        //
+        // ⚠ 但 `Resolve` 是**真的执行效果**,不是试算:所以费用必须先**确认付得起**,再调它。
+        //   否则付不起时效果已经生效、费却扣不掉 —— "白放一张牌",和攻击那条是一个病。
+        var cp = CommandPointController.Instance;
+        if (cp != null && !cp.CanAfford(card.deploymentCost))
+        {
+            message = $"指挥点不足（需要 {card.deploymentCost}）";
+            return CardPlayResult.Failed;
+        }
+
         if (!CardEffectResolver.Resolve(card, caster, unitTarget, rowTarget, out string result))
         {
             message = result;
             return CardPlayResult.Failed;
         }
 
-        var cp = CommandPointController.Instance;
         if (cp != null && !cp.TrySpend(card.deploymentCost))
         {
             message = "指挥点不足";
@@ -259,6 +268,18 @@ public class CardPlayDirector
         if (BattleSettlement.MatchOver) { message = "对局已经结束"; return false; }
 
         var caster = new CardEffectResolver.Caster(casterSide);
+
+        // 同上:Resolve 会真的执行效果,费用必须先确认付得起(敌方也走同一条,AI 不开挂)
+        if (casterSide == BattleSide.Enemy)
+        {
+            var enemy = EnemyDeckController.Instance;
+            if (enemy != null && !enemy.CanAfford(card.deploymentCost)) { message = "敌方指挥点不足"; return false; }
+        }
+        else
+        {
+            var cp = CommandPointController.Instance;
+            if (cp != null && !cp.CanAfford(card.deploymentCost)) { message = "指挥点不足"; return false; }
+        }
 
         if (!CardEffectResolver.Resolve(card, caster, unitTarget, rowTarget, out string result))
         {

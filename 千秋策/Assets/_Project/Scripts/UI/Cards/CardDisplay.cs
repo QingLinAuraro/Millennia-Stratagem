@@ -107,6 +107,13 @@ public class CardDisplay : MonoBehaviour
     [Tooltip("战场小卡上「受过伤」的血量颜色(当前 HP 低于上限时用)")]
     [SerializeField] private Color damagedStatColor = new Color(1f, 0.5f, 0.45f);
 
+    [Header("阵营数值颜色(战场)")]
+    [Tooltip("**我方**兵牌攻/血数字的底色(青蓝)")]
+    [SerializeField] private Color allyStatColor = new Color(0.55f, 0.82f, 1f);
+    [Tooltip("**敌方**兵牌攻/血数字的底色(赤)。敌方常借我方卡组,插画可能一模一样,\n" +
+             "攻/血颜色是最省事的一眼分清敌我的地方")]
+    [SerializeField] private Color enemyStatColor = new Color(0.98f, 0.55f, 0.48f);
+
     [Header("费用字号")]
     [Tooltip("勾上 = 手牌的部署费用按下面这一档字号写死。\n" +
              "取消(推荐)= 完全用 Card.prefab 里 DepCost 自己那段 TMP 的字号,代码不碰 —— " +
@@ -407,8 +414,13 @@ public class CardDisplay : MonoBehaviour
 
     /// <summary>
     /// 战场用:按当前值刷新攻/血两格,并把「受过伤 / 被 buff 过」标出来。
-    /// maxHP 比卡面高就是吃过增益(绿字),当前 HP 低于上限就是带伤(红字);
-    /// 都恢复正常时回到卡面原本的颜色。策略卡没有这两格,直接跳过。
+    ///
+    /// 【颜色分两层】
+    ///   · **底色 = 阵营**:我方青蓝、敌方赤(见 allyStatColor / enemyStatColor)。
+    ///     敌方经常借我方卡组,插画、朝代、兵种全都一样 —— 攻/血的颜色是"一眼分清敌我"最省事的地方。
+    ///   · **明暗 = 状态**:被增益提亮、带伤压暗,色相不变。
+    ///     以前状态是直接换色(增益绿 / 带伤红),现在颜色被阵营占了,再拿它表达状态
+    ///     就会变成"一个通道两个意思":红色到底是"敌方"还是"我方受伤",玩家分不出来。
     /// </summary>
     public void RefreshStats(int currentATK, int currentHP, int maxHP)
     {
@@ -417,17 +429,51 @@ public class CardDisplay : MonoBehaviour
 
         RefreshBattleStats(currentATK, currentHP);
 
+        var baseColor = StatBaseColor();
+
         bool buffed = maxHP > Data.hp;
         bool damaged = currentHP < maxHP;
 
         if (atkText != null)
         {
             bool atkBuffed = currentATK > Data.atk;
-            atkText.color = atkBuffed ? buffedStatColor : (currentATK < Data.atk ? damagedStatColor : baseStatColor);
+            bool atkDamaged = currentATK < Data.atk;
+            atkText.color = atkBuffed ? Brighten(baseColor) : (atkDamaged ? Darken(baseColor) : baseColor);
         }
 
         if (hpText != null)
-            hpText.color = damaged ? damagedStatColor : (buffed ? buffedStatColor : baseStatColor);
+            hpText.color = damaged ? Darken(baseColor) : (buffed ? Brighten(baseColor) : baseColor);
+    }
+
+    /// <summary>
+    /// 这张卡属于哪一方(战场卡才需要)。手牌不调,走预制体原色。
+    /// 由 FieldUnit.Init 在绑定之后立刻调一次,之后的 RefreshStats 就会按阵营上色。
+    /// </summary>
+    public void SetSide(BattleSide side)
+    {
+        ownerSide = side;
+        hasSide = true;
+    }
+
+    private BattleSide ownerSide;
+    private bool hasSide;
+
+    /// <summary>攻/血数字的底色:有阵营信息就按阵营,否则用预制体里那个原色</summary>
+    private Color StatBaseColor()
+        => hasSide ? (ownerSide == BattleSide.Player ? allyStatColor : enemyStatColor) : baseStatColor;
+
+    /// <summary>提亮(表示增益),保留原 alpha</summary>
+    private static Color Brighten(Color color)
+    {
+        var c = Color.Lerp(color, Color.white, 0.45f);
+        return new Color(c.r, c.g, c.b, color.a);
+    }
+
+    /// <summary>压暗(表示受伤),保留原 alpha</summary>
+    private static Color Darken(Color color)
+    {
+        var c = Color.Lerp(color, Color.black, 0.35f);
+        return new Color(c.r, c.g, c.b, color.a);
     }
 
     /// <summary>这张卡在场上算不算策略卡(策略卡不显示攻/血)</summary>
