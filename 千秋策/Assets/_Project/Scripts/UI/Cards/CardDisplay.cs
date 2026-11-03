@@ -30,8 +30,7 @@ public enum CardViewMode { Hand, Field }   // 手牌大卡 / 战场小卡
 ///     · rarityImage 是稀有度方框,有运行时保护:留空 → 按名字在卡牌层级里兜底找一次「special」,
 ///       还找不到才 LogError 且不上色;若被拖成了卡牌外部的 Image,ApplyRarity 会拒绝上色并报错,
 ///       免得把游戏背景整块染色。战场布局(Field)与没有方框的卡面直接跳过这一步。
-///     · illustrationImage 另有一个不会报错的坑:data.artwork 为 null 时它会保留上一张插画,
-///       复用同一个实例先看 A 后看 B 会残留 A 的图。
+///     · illustrationImage:数据缺图时会把 sprite 置空并关掉这张 Image,不再残留上一张卡的插画。
 ///   常调:
 ///     · **字号一律先改预制体**:每个文本节点(DepCost / ActCost / atk / hp / CardName / Dynasty / 词条 / 效果)
 ///       自己那段 TMP 上的 Font Size 就是最终显示的字号,代码默认一个字都不覆盖 ——
@@ -77,7 +76,7 @@ public class CardDisplay : MonoBehaviour
     [SerializeField] private TMP_Text effectsText;      // → description/effects
 
     [Header("图像")]
-    [Tooltip("插画,指 Card/background/illustration(战场是 CardsInBattle/Image)。只换 sprite 不动尺寸;artwork 为空时保留上一张的插画不置空")]
+    [Tooltip("插画,指 Card/background/illustration(战场是 CardsInBattle/Image)。只换 sprite 不动尺寸;artwork 为空时清空显示,不残留上一张")]
     [SerializeField] private Image illustrationImage;   // → illustration
 
     [Header("属性区")]
@@ -194,11 +193,13 @@ public class CardDisplay : MonoBehaviour
     }
 
     // ===== 插画 =====
-    // artwork 为空时保留上一张的插画(同一个实例复用时会残留前一张的图,这是刻意的兜底)
+    // 缺图时把 sprite 置空并关掉这张 Image,避免复用的实例残留上一张卡的插画
     private void ApplyIllustration(CardData data)
     {
-        if (illustrationImage == null || data == null || data.artwork == null) return;
-        illustrationImage.sprite = data.artwork;
+        if (illustrationImage == null) return;
+        var sprite = data != null ? data.artwork : null;
+        illustrationImage.sprite = sprite;
+        illustrationImage.enabled = sprite != null;
     }
 
     // ===== 关键词 =====
@@ -206,16 +207,28 @@ public class CardDisplay : MonoBehaviour
     {
         if (keywordsText == null || data == null) return;
 
-        var sb = new StringBuilder();
+        // 先把同一个词条聚成一项、记住出现次数。
+        // 为什么不能直接按列表顺序拼:重甲的层数是靠**重复项数**编码的
+        // (重甲2 = 两个 HeavyArmor,见 BattleRules.HeavyArmorLayers),
+        // 原样拼出来是「守护，重甲，重甲」,读起来像写错了。
+        // 这里同一词条只写一次、多层的补个数字 →「守护，重甲2」,和材料表里的写法一致。
+        var order = new List<Keyword>();
+        var counts = new Dictionary<Keyword, int>();
         for (int i = 0; i < data.keywords.Count; i++)
         {
-            if (i > 0) sb.Append("，");
-            sb.Append(KeywordToChinese(data.keywords[i]));
+            var k = data.keywords[i];
+            if (counts.TryGetValue(k, out int n)) counts[k] = n + 1;
+            else { counts[k] = 1; order.Add(k); }
         }
 
-        // 注意:这里**不做去重**。keywords 里出现重复项在本项目是合法数据 ——
-        // 重甲的层数就是靠重复次数编码的(重甲1 = HeavyArmor 一项,重甲2 = 两项,依此类推),
-        // 见 BattleRules.KeywordCount / HeavyArmorLayers。卡面该照着数据原样显示。
+        var sb = new StringBuilder();
+        for (int i = 0; i < order.Count; i++)
+        {
+            if (i > 0) sb.Append("，");
+            sb.Append(KeywordToChinese(order[i]));
+            if (counts[order[i]] > 1) sb.Append(counts[order[i]]);
+        }
+
         keywordsText.text = sb.ToString();
     }
 
@@ -366,9 +379,12 @@ public class CardDisplay : MonoBehaviour
         if (hpRoot != null) hpRoot.SetActive(isUnit);             // 生命值:策略卡隐藏
 
         if (categoryText != null)
-            categoryText.text = TypeNames.TryGetValue(Data.unitType, out var typeName)
-                ? typeName
-                : Data.unitType.ToString();
+            // 大营卡是 Building:它没有兵种,直接写「建筑」,否则会借用 Strategy 显示成「策」
+            categoryText.text = Data.cardType == CardType.Building
+                ? "建筑"
+                : TypeNames.TryGetValue(Data.unitType, out var typeName)
+                    ? typeName
+                    : Data.unitType.ToString();
 
         if (!isUnit) return;
         if (atkText != null) atkText.text = Data.atk.ToString();

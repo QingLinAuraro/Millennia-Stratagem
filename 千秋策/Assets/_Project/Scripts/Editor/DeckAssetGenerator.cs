@@ -21,8 +21,8 @@ using UnityEngine;
 ///   挂在:不是组件,是编辑器静态类。文件必须在 Assets 下的任意 Editor 文件夹里。
 ///   菜单:· 千秋策/卡组/重新生成两套默认卡组   —— 删掉再建,**会覆盖手改内容**
 ///         · 千秋策/卡组/校验全部卡组           —— 对着所有卡组资产跑一遍规则自检
-///   常调:· 改卡组构成就改下面的 HanDeck / QinDeck 两张表。
-///         · 卡池换代(改了 cardId)之后,这里的 id 会找不到卡 —— 校验菜单会报出来。
+///   常调:· 改卡组构成就改 ComposeDeck 里的稀有度方案(DeckQuota.TargetOf 那边也有一份,两边要一致)。
+///         · 卡池换代(加了新卡/改了 id)不用动这里 —— 它是按稀有度从卡池里挑的,不认 cardId。
 /// </summary>
 public static class DeckAssetGenerator
 {
@@ -39,85 +39,76 @@ public static class DeckAssetGenerator
     private const string HanDeckPath = DeckFolder + "/Default_Han.asset";
     private const string QinDeckPath = DeckFolder + "/Default_Qin.asset";
 
-    // ================================================================ 两张卡组表
+    // ================================================================ 构筑方案
     //
-    // 格式:"cardId 重复次数"
+    // 【为什么不再写死 cardId 列表】
+    //   以前这里是两张 "han_001 ×4" 的表。卡池统一改 id 之后(现在是 qin_u_01 / han_t_03 这种),
+    //   整张表全部落空 —— 生成出来是空卡组,而 Unity 不会因此报错,
+    //   只在日志里说一句"这些 id 找不到卡",很容易被当成"卡组已经有了"忽略过去。
+    //   改成"按稀有度从卡池里挑"之后,id 怎么变都不影响:卡池扫得到,卡组就建得出来。
     //
-    // 构成规则(策划案§5,由 DeckPreset.ValidateCards 强制):
-    //   30 张 = 12 普通 + 8 稀有 + 4 史诗 + 2 传说 + 4 弹性位(可填普通/稀有/史诗)
-    //   主朝代 >= 25 张;次朝代 <= 5 张且不得编入传说
+    // 构成规则(§5.1/§5.2,由 DeckPreset.ValidateCards 强制):
+    //   40 张 = 39 张可构筑 + 1 张固定大营
+    //   稀有度只有**上限**:普通 ≤39 / 稀有 ≤12 / 史诗 ≤8 / 传说 ≤4(大营不计入)
     //   同名上限:普通 4 / 稀有 3 / 史诗 2 / 传说 1
+    //   主朝代 ≥ 29 张;次朝代 ≤ 5 张且不得编入传说
     //
-    // 【为什么普通卡要靠重复凑,而不是"每种放一张"】
-    //   每个朝代只有 8 种普通卡,但普通位要 12 张 —— 不重复根本凑不满。
-    //   所以这里刻意让几张主力普通卡吃满 4 张上限(汉弩手 ×4、材官骑士 ×4),
-    //   这是构筑的常态:靠重复把某张牌摸到的概率顶上去。构筑界面也支持玩家这么干。
-    //
-    // 汉·闪击冲阵:材官骑士+骁骑双闪击抢节奏,轻车骑伏兵偷袭,游徼骑与射声士连战滚雪球
-    private static readonly string[] HanDeck =
+    // 铺法(和 DeckQuota.TargetOf 一致):把前三档吃满,剩下的全给普通
+    //   4 传说 + 8 史诗 + 12 稀有 + 15 普通 = 39
+    private static readonly Rarity[] TierOrder =
+        { Rarity.Legend, Rarity.Epic, Rarity.Rare, Rarity.Ordinary };
+
+    /// <summary>按稀有度方案从卡池里挑 39 张 + 1 张大营。挑不满会把原因写进 problems</summary>
+    private static List<CardData> ComposeDeck(CardLibrary library, string dynasty, DeckQuota quota,
+                                              List<string> problems)
     {
-        // ---- 普通 12 张 ----
-        "han_001", "han_001", "han_001", "han_001",   // 汉弩手 ×4   弓 3/2 远程(吃满上限)
-        "han_002", "han_002", "han_002", "han_002",   // 材官骑士 ×4 骑 2/1 闪击(吃满上限)
-        "han_003", "han_003",                         // 边郡戍卒 ×2 步 2/3
-        "han_004",                                     // 材官 ×1      步 3/5
-        "han_006",                                     // 游徼骑 ×1    骑 3/4 闪击/连战
+        var result = new List<CardData>();
+        int budget = DeckPreset.DeckSize - 1;
 
-        // ---- 稀有 8 张 ----
-        "han_009",                                     // 轻车骑 ×1    骑 3/4 闪击/伏兵
-        "han_010", "han_010",                         // 材官蹶张 ×2 弓 4/3
-        "han_012", "han_012",                         // 玄甲校士 ×2 步 5/4 重甲
-        "han_014", "han_014", "han_014",              // 骁骑 ×3      骑 5/5 闪击(吃满上限)
+        for (int t = 0; t < TierOrder.Length; t++)
+        {
+            var rarity = TierOrder[t];
+            if (budget <= 0) break;
 
-        // ---- 史诗 4 张 ----
-        "han_017", "han_017",                         // 射声士 ×2    弓 4/2 连战
-        "han_019",                                     // 虎贲营 ×1    步 4/5 守护/重甲
-        "han_020",                                     // 白马校尉 ×1 骑 5/6 闪击/伏兵
+            // 普通档是**兜底档**:它必须把剩下的坑全吃掉,否则前面的档凑不满
+            // (比如传说只有 3 种,少一张)时总张数就永远差一张,卡组直接判非法。
+            int want = rarity == Rarity.Ordinary
+                ? Mathf.Min(quota.MaxOf(rarity), budget)
+                : Mathf.Min(Mathf.Min(quota.TargetOf(rarity), quota.MaxOf(rarity)), budget);
+            if (want <= 0) continue;
 
-        // ---- 传说 2 张 ----
-        "han_022",                                     // 骠骑精骑     骑 6/6 闪击/血战
-        "han_023",                                     // 羽林壁垒     步 6/4 守护/重甲
+            // 按卡池顺序摊成候选(每种卡最多同名上限张),取前 want 张 —— 确定性:
+            // 同样的卡池每次生成出同一套牌,不会一按菜单就换一套。
+            int cap = DeckPreset.MaxCopiesOf(rarity);
+            var candidates = new List<CardData>();
+            var pool = library.Filter(rarity, dynasty, null);
+            for (int i = 0; i < pool.Count; i++)
+            {
+                // 大营卡的 rarity 也是「普通」,必须排掉,否则会被当普通卡抓进牌堆
+                if (pool[i] == null || pool[i].cardType == CardType.Building) continue;
+                for (int k = 0; k < cap; k++) candidates.Add(pool[i]);
+            }
 
-        // ---- 弹性位 4 张(次朝代 1/5)----
-        "qin_001", "qin_001",                         // 什伍卒 ×2    步 1/2
-        "qin_002", "qin_002",                         // 戍卒 ×2      步 2/3
-    };
+            int take = Mathf.Min(want, candidates.Count);
+            for (int i = 0; i < take; i++) result.Add(candidates[i]);
+            budget -= take;
 
-    // 秦·重甲弓弩:铁鹰剑士架前排,连弩士与穿杨弩手后排输出,陷阵士血战换命
-    //
-    // 注意这张表和上面那张**不是对称的**:秦当主朝代时,主朝代要 >= 25 张,
-    // 那么次朝代最多只能借 5 张 —— 所以这里只从汉借了 2 张(治粟都尉 han_005、
-    // 招降 han_007),秦 28 + 汉 2 = 30。
-    // 别为了"两边看起来对称"往这里多塞汉卡,一塞就超过 §5.3.2 的 5 张上限。
-    private static readonly string[] QinDeck =
-    {
-        // ---- 普通 12 张 ----
-        "qin_004", "qin_004", "qin_004", "qin_004",   // 劲弩手 ×4   弓 3/2(吃满上限)
-        "qin_006", "qin_006", "qin_006", "qin_006",   // 疾驰轻骑 ×4 骑 闪击(吃满上限)
-        "qin_001", "qin_001",                         // 什伍卒 ×2   步 1/2
-        "qin_002",                                     // 戍卒 ×1      步 2/3
-        "qin_003",                                     // 秦锐士 ×1    步 3/5
+            if (take < want)
+                Debug.LogWarning($"[卡组] {dynasty} 的{DeckPreset.RarityName(rarity)}卡只够 {take} 张" +
+                                 $"(计划 {want} 张),空出来的位置让给下一档。");
+        }
 
-        // ---- 稀有 8 张 ----
-        "qin_009",                                     // 斥候骑 ×1
-        "qin_011", "qin_011",                         // 穿杨弩手 ×2
-        "qin_012", "qin_012", "qin_012",              // 铁鹰剑士 ×3 重甲(吃满上限)
-        "qin_013", "qin_013",                         // 陷阵士 ×2    血战
+        if (budget > 0)
+            problems.Add($"{dynasty} 卡池凑不满 {DeckPreset.DeckSize} 张(还差 {budget} 张)," +
+                         "检查卡池是不是缺卡");
 
-        // ---- 史诗 4 张 ----
-        "qin_017", "qin_017",                         // 连弩士 ×2    连战
-        "qin_018",                                     // 绝粮道 ×1    策略
-        "qin_019",                                     // 锐士营 ×1    守护/重甲
+        // 大营卡:固定 1 张,占最后一个位置,不计入稀有度
+        var camps = library.Filter(null, dynasty, CardType.Building);
+        if (camps.Count > 0) result.Add(camps[0]);
+        else problems.Add($"{dynasty} 没有大营卡(cardType = Building),卡组必然不合法");
 
-        // ---- 传说 2 张 ----
-        "qin_022",                                     // 玄甲铁骑     骑 6/6 闪击/血战
-        "qin_023",                                     // 函谷铁卫     步 6/6 守护/重甲
-
-        // ---- 弹性位 4 张(秦系 26 张 + 汉系 4 张)----
-        "qin_020", "qin_020",                         // 商君变法 ×2  策略
-        "han_005",                                     // 治粟都尉 ×1  器 3/4
-        "han_007",                                     // 招降 ×1      策略
-    };
+        return result;
+    }
 
     // ================================================================ 自动生成
 
@@ -171,9 +162,9 @@ public static class DeckAssetGenerator
         AssetDatabase.Refresh();
 
         BuildDeck(HanDeckPath, "汉·兵种混杂", "汉",
-                  "步骑弓混杂的中军流:材官骑士闪击抢节奏,游徼骑与射声士连战滚雪球。", HanDeck);
+                  "步骑弓混杂的中军流:材官骑士闪击抢节奏,游徼骑与射声士连战滚雪球。");
         BuildDeck(QinDeckPath, "秦·重甲弓弩", "秦",
-                  "铁鹰剑士与函谷铁卫架住前排,连弩士和蹶张神弩在后排持续输出。", QinDeck);
+                  "铁鹰剑士与函谷铁卫架住前排,连弩士和蹶张神弩在后排持续输出。");
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
@@ -185,9 +176,9 @@ public static class DeckAssetGenerator
         }
     }
 
-    /// <summary>把一张 "cardId 列表" 落成一个 DeckPreset 资产</summary>
+    /// <summary>把一套卡组落成 DeckPreset 资产(内容由 ComposeDeck 按稀有度方案从卡池里挑)</summary>
     private static void BuildDeck(string assetPath, string deckName, string primaryDynasty,
-                                  string description, string[] cardIds)
+                                  string description)
     {
         // 先删再建:保证 card 列表是干净的(不删的话旧的会残留在列表里)
         if (File.Exists(assetPath)) AssetDatabase.DeleteAsset(assetPath);
@@ -200,26 +191,23 @@ public static class DeckAssetGenerator
         preset.quota = new DeckQuota();
 
         var library = CardLibrary.Current;
-        var missing = new List<string>();
+        var composeProblems = new List<string>();
 
-        for (int i = 0; i < cardIds.Length; i++)
-        {
-            var card = library != null ? library.Find(cardIds[i]) : null;
-            if (card == null) { missing.Add(cardIds[i]); continue; }
-            preset.cards.Add(card);
-        }
-
-        if (missing.Count > 0)
-            Debug.LogError($"[卡组] 「{deckName}」有 {missing.Count} 个 cardId 在卡池里找不到:" +
-                           $"{string.Join("、", missing)}。卡池是不是改过 id?这几种卡不会进卡组。");
+        if (library != null && library.Count > 0)
+            preset.cards = ComposeDeck(library, primaryDynasty, preset.quota, composeProblems);
+        else
+            composeProblems.Add("CardLibrary.Current 是空的,扫不到卡牌资产(是不是不在 Resources 下面?)");
 
         AssetDatabase.CreateAsset(preset, assetPath);
 
-        // 自检:生成出来就该是合法的,不合法立刻报出来(不合法 = 上面那张表写错了)
-        var problems = new List<string>();
-        if (!preset.IsValid(problems))
-            Debug.LogError($"[卡组] 「{deckName}」生成出来不合法,检查 DeckAssetGenerator 里的表:\n" +
-                           $"  · {string.Join("\n  · ", problems)}");
+        // 自检:生成出来就该是合法的,不合法立刻报出来(不合法 = 卡池缺卡,或者规则改了没同步)
+        // ⚠ IsValid 会 Clear 传进去的列表,所以先拷一份,别把 ComposeDeck 的原因冲掉
+        var problems = new List<string>(composeProblems);
+        var ruleProblems = new List<string>();
+        if (!preset.IsValid(ruleProblems)) problems.AddRange(ruleProblems);
+
+        if (problems.Count > 0)
+            Debug.LogError($"[卡组] 「{deckName}」生成出来不合法:\n  · {string.Join("\n  · ", problems)}");
         else
             Debug.Log($"[卡组] 「{deckName}」{preset.cards.Count} 张 ✓  {preset.Describe()}");
     }

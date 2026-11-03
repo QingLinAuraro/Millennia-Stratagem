@@ -9,13 +9,14 @@ using UnityEngine.UI;
 /// 卡组构筑界面:左边是**卡池**(每种卡显示一张,角标写"已放 N"),右边是**当前卡组**。
 ///
 /// 【操作方式】
-///   · 点左边卡池里的一张卡 → 往卡组里加一张(同名上限内可以加到 4 张,见 DeckPreset.MaxCopiesOf)
+///   · 点左边卡池里的一张卡 → 往卡组里加一张(同名上限:普通 4 / 稀有 3 / 史诗 2 / 传说 1,
+///     大营卡固定 1 张,见 CopyLimitOf)
 ///   · 右边卡组里每张卡带 - / +,点 - 拿掉一张,点 + 再加一张
-///   · 顶部实时显示「张数 / 30」和稀有度配额完成度,不满足规则的地方标红
+///   · 顶部实时显示「张数 / 40」「大营 x/1」和四档稀有度的"已放 / 上限",不满足规则的地方标红
 ///
 /// 【为什么卡池按"种类"排,而不是一格一张卡】
-///   30 张的卡组里普通卡可以同名 4 张,卡池要是把 4 张同名牌平铺出来,玩家得自己数"这张我还要几张",
-///   而且卡池总格子数会变成"30 多张"这种很长的滚动列表。按种类排 + 角标显示"已放 N / 上限 M",
+///   40 张的卡组里普通卡可以同名 4 张,卡池要是把 4 张同名牌平铺出来,玩家得自己数"这张我还要几张",
+///   而且卡池总格子数会变成"几十张"这种很长的滚动列表。按种类排 + 角标显示"已放 N / 上限 M",
 ///   加几张一眼就看得出来,点一下加一张也最直接。
 ///
 /// 【挂载 & 调整】
@@ -45,13 +46,17 @@ public class DeckEditorPanel : MonoBehaviour
     // 最多 3 行算,格子内宽至少 210px、文本区高至少 78px,于是定成 300×270。
     // 再小就会出现"字挤成一条看不清",而看不清的话格子还不如只显示名字。
     [Tooltip("卡池每格尺寸(px)。要放得下卡名 + 效果文本 + 费用/属性,别低于 260×240")]
-    [SerializeField] private Vector2 cardCellSize = new Vector2(300f, 270f);
+    [SerializeField] private Vector2 cardCellSize = new Vector2(300f, 300f);
     [Tooltip("卡池每行几张。格子变宽后 4 列刚好铺满左栏")]
     [SerializeField] private int columns = 4;
     [Tooltip("卡池格间距")]
     [SerializeField] private Vector2 cardCellSpacing = new Vector2(12f, 12f);
-    [Tooltip("卡池卡面缩放。只在 cardPrefab 接了卡面、走「整张卡面」那条老路时才用得上")]
-    [SerializeField] private float poolScale = 0.78f;
+    [Tooltip("卡池卡面缩放。卡面是 150×200,1.25 倍后约 187×250,比原来的 0.78 大一倍多")]
+    [SerializeField] private float poolScale = 1.25f;
+
+    [Header("卡池朝代筛选")]
+    [Tooltip("当前筛选的朝代;留空 = 全部。构筑时按朝代分开找,72 张混在一起根本翻不过来")]
+    [SerializeField] private string dynastyFilter = "";
 
     [Header("卡池文字")]
     [Tooltip("卡池格子里卡名的字号")]
@@ -94,6 +99,13 @@ public class DeckEditorPanel : MonoBehaviour
     private readonly Dictionary<CardData, GameObject> poolCells = new Dictionary<CardData, GameObject>();
 
     private bool built;
+
+    /// <summary>朝代筛选栏的高度。滚动区要往下让这么多,否则第一行卡会被按钮盖住</summary>
+    private const float DynastyBarHeight = 52f;
+
+    // 筛选按钮:value 为空串表示「全部」
+    private readonly List<Image> filterButtonImages = new List<Image>();
+    private readonly List<string> filterButtonValues = new List<string>();
 
     public bool IsOpen => gameObject.activeSelf;
 
@@ -179,10 +191,13 @@ public class DeckEditorPanel : MonoBehaviour
         }
 
         int have = CountIn(card);
-        int limit = DeckPreset.MaxCopiesOf(card.rarity);
+        int limit = CopyLimitOf(card);
         if (have >= limit)
         {
-            SetStatus($"「{card.cardName}」是{DeckPreset.RarityName(card.rarity)}卡,同名最多 {limit} 张(§5.2)", badColor);
+            SetStatus(card.cardType == CardType.Building
+                ? "大营卡只能带 1 张(它决定战场大营用哪张图,不占稀有度)"
+                : $"「{card.cardName}」是{DeckPreset.RarityName(card.rarity)}卡,同名最多 {limit} 张(§5.2)",
+                badColor);
             return false;
         }
 
@@ -190,6 +205,15 @@ public class DeckEditorPanel : MonoBehaviour
         RefreshAll();
         return true;
     }
+
+    /// <summary>
+    /// 这张卡的同名上限。大营是固定位,只许 1 张 —— 它的 rarity 也是「普通」,
+    /// 照稀有度算会给出 4 张,和"卡组只能有 1 张大营"的规则打架。
+    /// </summary>
+    private static int CopyLimitOf(CardData card)
+        => card != null && card.cardType == CardType.Building
+            ? 1
+            : DeckPreset.MaxCopiesOf(card != null ? card.rarity : Rarity.Ordinary);
 
     /// <summary>从卡组里拿掉一张</summary>
     public bool TryRemove(CardData card)
@@ -246,7 +270,8 @@ public class DeckEditorPanel : MonoBehaviour
         var poolRoot = NewRect(root, "PoolRoot",
                                new Vector2(0f, 0f), new Vector2(0.68f, 1f),
                                new Vector2(48f, 120f), new Vector2(-12f, -180f));
-        poolContent = BuildScrollGrid(poolRoot, "PoolScroll", "PoolContent", out _);
+        BuildDynastyBar(poolRoot);
+        poolContent = BuildScrollGrid(poolRoot, "PoolScroll", "PoolContent", out _, DynastyBarHeight);
 
         // ---- 右栏:当前卡组 ----
         var deckRoot = NewRect(root, "DeckRoot",
@@ -278,11 +303,93 @@ public class DeckEditorPanel : MonoBehaviour
         CreateButton(btnRow, "BtnSetActive", "设为出战", new Vector2(150f, 100f), SaveAndSetActive);
     }
 
+    /// <summary>
+    /// 卡池顶部的朝代筛选栏:全部 / 秦 / 汉 / 通用。
+    /// 72 张卡铺在一个滚动列表里,不分开的话想找某一张得从头翻到尾。
+    /// </summary>
+    private void BuildDynastyBar(RectTransform parent)
+    {
+        var bar = NewRect(parent, "DynastyBar", new Vector2(0f, 1f), new Vector2(1f, 1f),
+                          new Vector2(0f, -DynastyBarHeight), Vector2.zero);
+        var layout = bar.gameObject.AddComponent<HorizontalLayoutGroup>();
+        layout.childAlignment = TextAnchor.MiddleLeft;
+        layout.spacing = 10f;
+        layout.padding = new RectOffset(8, 8, 4, 4);
+        layout.childControlWidth = false;
+        layout.childControlHeight = false;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+
+        CreateFilterButton(bar, "BtnFilterAll", "全部", "");
+        CreateFilterButton(bar, "BtnFilterQin", "秦", "秦");
+        CreateFilterButton(bar, "BtnFilterHan", "汉", "汉");
+        CreateFilterButton(bar, "BtnFilterGen", "通用", CardLibrary.CommonDynasty);
+
+        UpdateFilterTint();
+    }
+
+    private void CreateFilterButton(RectTransform parent, string name, string label, string value)
+    {
+        var size = new Vector2(104f, 40f);
+        var rt = NewRect(parent, name, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                         Vector2.zero, size);
+
+        var le = rt.gameObject.AddComponent<LayoutElement>();
+        le.preferredWidth = size.x;
+        le.preferredHeight = size.y;
+        le.minWidth = size.x;
+        le.minHeight = size.y;
+
+        var image = rt.gameObject.AddComponent<Image>();
+        image.color = FilterColor(value == dynastyFilter);
+
+        var button = rt.gameObject.AddComponent<Button>();
+        button.targetGraphic = image;
+        var captured = value;
+        button.onClick.AddListener(() => SetDynastyFilter(captured));
+
+        var text = RuntimeText.Create(rt, "Label", label, 20f,
+                                      TextAlignmentOptions.Center, new Color(0.98f, 0.94f, 0.8f));
+        var textRect = (RectTransform)text.transform;
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
+        text.raycastTarget = false;
+
+        filterButtonImages.Add(image);
+        filterButtonValues.Add(value);
+    }
+
+    private static Color FilterColor(bool active)
+    {
+        return active
+            ? new Color(0.62f, 0.45f, 0.20f, 1f)
+            : new Color(0.30f, 0.23f, 0.16f, 1f);
+    }
+
+    private void UpdateFilterTint()
+    {
+        for (int i = 0; i < filterButtonImages.Count && i < filterButtonValues.Count; i++)
+        {
+            if (filterButtonImages[i] == null) continue;
+            filterButtonImages[i].color = FilterColor(filterButtonValues[i] == dynastyFilter);
+        }
+    }
+
+    private void SetDynastyFilter(string dynasty)
+    {
+        dynastyFilter = dynasty ?? "";
+        UpdateFilterTint();
+        BuildPool();
+        RefreshAll();
+    }
+
     private RectTransform BuildScrollGrid(RectTransform parent, string scrollName, string contentName,
-                                          out ScrollRect scroll)
+                                          out ScrollRect scroll, float topInset = 0f)
     {
         var scrollGo = NewRect(parent, scrollName, Vector2.zero, Vector2.one,
-                               Vector2.zero, Vector2.zero).gameObject;
+                               Vector2.zero, new Vector2(0f, -topInset)).gameObject;
         scroll = scrollGo.AddComponent<ScrollRect>();
         scroll.horizontal = false;
         scroll.vertical = true;
@@ -372,7 +479,7 @@ public class DeckEditorPanel : MonoBehaviour
             if (kv.Value == null) continue;
 
             int have = CountIn(card);
-            int limit = DeckPreset.MaxCopiesOf(card.rarity);
+            int limit = CopyLimitOf(card);
 
             if (have == 0)
             {
@@ -447,7 +554,7 @@ public class DeckEditorPanel : MonoBehaviour
         label.raycastTarget = false;
 
         // 同名加满时把卡名标红(和卡池角标一个口径)
-        if (count >= DeckPreset.MaxCopiesOf(card.rarity)) label.color = badColor;
+        if (count >= CopyLimitOf(card)) label.color = badColor;
 
         // 按钮上的字用 ASCII 的 "-" / "+":➖(U+2796) ➕(U+2795) 属于 Emoji 符号区,
         // 中文字体一般没有这两个字形,借来的 TMP 字体渲染出来是个方框。
@@ -460,15 +567,20 @@ public class DeckEditorPanel : MonoBehaviour
         if (statusText == null) return;
 
         var counts = new Dictionary<Rarity, int>();
-        int primary = 0, secondary = 0, legendsFromSecondary = 0;
-        string primaryDynasty = decks.Count > 0 && decks[Mathf.Clamp(deckIndex, 0, decks.Count - 1)] != null
-            ? decks[Mathf.Clamp(deckIndex, 0, decks.Count - 1)].primaryDynasty
-            : "汉";
+        int primary = 0, secondary = 0, legendsFromSecondary = 0, camps = 0;
+
+        int deckIdx = decks.Count > 0 ? Mathf.Clamp(deckIndex, 0, decks.Count - 1) : -1;
+        var basis = deckIdx >= 0 ? decks[deckIdx] : null;
+        string primaryDynasty = basis != null ? basis.primaryDynasty : "汉";
+        var quota = basis != null && basis.quota != null ? basis.quota : new DeckQuota();
 
         for (int i = 0; i < working.Count; i++)
         {
             var c = working[i];
             if (c == null) continue;
+            // 大营不计入稀有度,也不参与朝代混编统计(和 DeckPreset.ValidateCards 同一套口径)
+            if (c.cardType == CardType.Building) { camps++; continue; }
+
             counts.TryGetValue(c.rarity, out int n);
             counts[c.rarity] = n + 1;
 
@@ -482,13 +594,17 @@ public class DeckEditorPanel : MonoBehaviour
 
         var sb = new StringBuilder();
         sb.Append($"共 {working.Count} / {DeckPreset.DeckSize} 张");
+        sb.Append($"   大营 {camps}/1");
 
+        // 稀有度是**上限**:超过才标红,少带是合法的
         var order = new[] { Rarity.Ordinary, Rarity.Rare, Rarity.Epic, Rarity.Legend };
-        var want = new[] { 12, 8, 4, 2 };
+        bool rarityOk = true;
         for (int i = 0; i < order.Length; i++)
         {
             counts.TryGetValue(order[i], out int got);
-            sb.Append($"   {DeckPreset.RarityName(order[i])} {got}/{want[i]}");
+            int limit = quota.MaxOf(order[i]);
+            if (got > limit) rarityOk = false;
+            sb.Append($"   {DeckPreset.RarityName(order[i])} {got}/{limit}");
         }
 
         sb.Append($"   主{primaryDynasty} {primary}/{DeckPreset.PrimaryDynastyMin}");
@@ -502,7 +618,7 @@ public class DeckEditorPanel : MonoBehaviour
         bool dynastyOk = primary >= DeckPreset.PrimaryDynastyMin
                          && secondary <= DeckPreset.SecondaryDynastyMax
                          && legendsFromSecondary == 0;
-        statusText.color = sizeOk && dynastyOk ? okColor : textColor;
+        statusText.color = sizeOk && dynastyOk && rarityOk && camps == 1 ? okColor : textColor;
     }
 
     private void SetStatus(string message, Color color)
@@ -532,6 +648,8 @@ public class DeckEditorPanel : MonoBehaviour
         {
             var card = library.cards[i];
             if (card == null) continue;
+            // 朝代筛选:留空 = 全部
+            if (!string.IsNullOrEmpty(dynastyFilter) && card.dynasty != dynastyFilter) continue;
             CreatePoolCell(card);
         }
     }

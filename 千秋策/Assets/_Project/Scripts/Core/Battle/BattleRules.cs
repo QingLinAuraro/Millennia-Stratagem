@@ -23,6 +23,19 @@ public static class BattleRules
     public const int BackUnitCapacity = 1;    // §2.3:后军 3 容量 - 军械库 - 粮草
     public const int FrontUnitCapacity = 4;   // §2.3:共享前军,无建筑
 
+    /// <summary>
+    /// 兵牌 ATK / HP 的硬上限(两者共用 99)。
+    ///
+    /// 为什么要有个明确的数:加攻/加血的牌可以一直叠,不封顶的话后期会出现"一个单位 300 攻"
+    /// 这种没法读也没法平衡的场面。99 是"能叠到很夸张、但仍然看得懂"的取值。
+    ///
+    /// ⚠ **只限兵牌**。建筑(大营 / 军械库 / 粮草)的血量不设上限,那是刻意设计的
+    ///   (见 FieldUnit.ApplyHpDelta:建筑回多少涨多少,上限跟着抬)。
+    /// ⚠ 所有改数值的入口(SetAtk / ApplyAtkDelta / ApplyMaxHpDelta / SetHp / Init)
+    ///   都必须夹这个上限 —— 只在一处夹,别的入口照样能突破,等于没设。
+    /// </summary>
+    public const int MaxUnitStat = 99;
+
     /// <summary>三座建筑的名字(和 BattlefieldManager 的默认建筑表、BattleRow 的查询一致)</summary>
     public const string CampName = "大营";
     public const string ArsenalName = "军械库";
@@ -349,7 +362,10 @@ public static class BattleRules
         => attacker != null && target != null && !attacker.IsBuilding && !target.IsBuilding
            && ClassOf(attacker) == ClassOf(target);
 
-    /// <summary>行动次数(AP 上限):骑兵 2、带「连战」的 2、其余 1(§2.5)</summary>
+    /// <summary>
+    /// 行动次数(AP 上限):骑兵 2(= 移动 + 攻击)、带「连战」的 2(= 攻击×2)、其余 1(攻击或移动)(§2.5)。
+    /// 2 点不是两次任意行动 —— 具体限制由 FieldUnit.CanMoveNow / CanAttackNow 与 BattleRules.CanMoveTo / CanAttack 共同约束。
+    /// </summary>
     public static int ActionPointsOf(CardData card)
     {
         if (card == null || card.cardType != CardType.Unit || card.unitType == UnitType.Strategy) return 0;
@@ -365,6 +381,10 @@ public static class BattleRules
     /// <summary>卡面上带不带这个关键词</summary>
     public static bool HasKeyword(CardData card, Keyword keyword)
         => card != null && card.keywords != null && card.keywords.Contains(keyword);
+
+    /// <summary>这个场上单位现在带不带这个关键词(卡面自带 + 本局后置授予)</summary>
+    public static bool HasKeyword(FieldUnit unit, Keyword keyword)
+        => unit != null && unit.IsUnit && unit.HasKeyword(keyword);
 
     /// <summary>
     /// 卡面上某个关键词出现了几次。用来还原「重甲1 / 重甲2 / 重甲3」这类档位 ——
@@ -391,7 +411,7 @@ public static class BattleRules
 
     /// <summary>这个成员带不带「守护」</summary>
     public static bool HasGuard(FieldUnit unit)
-        => unit != null && unit.IsUnit && HasKeyword(unit.Data, Keyword.Guard);
+        => unit != null && unit.IsUnit && HasKeyword(unit, Keyword.Guard);
 
     /// <summary>
     /// 目标是不是被同排相邻的守护单位保护着(§4.3)。
@@ -526,8 +546,18 @@ public static class BattleRules
         {
             if (attacker.SuppressTurns > 0) { reason = "这个单位被压制，无法行动"; return false; }
             if (attacker.Ap <= 0) { reason = "行动力已耗尽"; return false; }
-            if (attacker.DeployedThisTurn && !HasKeyword(attacker.Data, Keyword.Blitz))
+            if (attacker.DeployedThisTurn && !HasKeyword(attacker, Keyword.Blitz))
             { reason = "刚部署的单位本回合不能行动（需要「闪击」）"; return false; }
+
+            // §2.5 行动模式：骑兵 2 AP = 移动 + 攻击；其他兵种 1 AP = 攻击或移动。
+            // 非骑兵移动过就不能再攻击；骑兵移动后最多再攻击 1 次（连战不叠成「移动 + 双击」）。
+            if (!attacker.IsCavalry && attacker.MovedThisTurn)
+            { reason = "本回合已经移动过，不能再攻击（只有骑兵可以移动后攻击）"; return false; }
+
+            int maxAttacks = attacker.MaxAttacksThisTurn;
+            if (attacker.IsCavalry && attacker.MovedThisTurn && maxAttacks > 1) maxAttacks = 1;
+            if (attacker.AttacksThisTurn >= maxAttacks)
+            { reason = "本回合攻击次数已用完"; return false; }
         }
 
         if (!target.IsAlive) { reason = "目标已经阵亡"; return false; }
@@ -572,8 +602,15 @@ public static class BattleRules
         if (!unit.IsAlive) { reason = "这个单位已经阵亡"; return false; }
         if (unit.SuppressTurns > 0) { reason = "这个单位被压制，无法行动"; return false; }
         if (unit.Ap <= 0) { reason = "行动力已耗尽"; return false; }
-        if (unit.DeployedThisTurn && !HasKeyword(unit.Data, Keyword.Blitz))
+        if (unit.DeployedThisTurn && !HasKeyword(unit, Keyword.Blitz))
         { reason = "刚部署的单位本回合不能行动（需要「闪击」）"; return false; }
+
+        // §2.5 行动模式：骑兵每回合只能移动 1 次（攻击后仍可移动）；其他兵种移动/攻击二选一。
+        if (unit.MovedThisTurn) { reason = "本回合已经移动过（每回合只能移动一次）"; return false; }
+        if (!unit.IsCavalry && unit.AttacksThisTurn > 0)
+        { reason = "本回合已经攻击过，不能再移动（1 AP 只能二选一）"; return false; }
+        if (unit.IsCavalry && unit.AttacksThisTurn >= 2)
+        { reason = "本回合攻击次数已用完，不能再移动"; return false; }
 
         // 已经在目标排上 = 没移动。不算合法,也不该收行动力与 CP —— 判进来的话玩家会为"原地不动"付一次费
         if (sideCarrier != null && sideCarrier == from) { reason = "该单位已经在这条排上"; return false; }
@@ -750,7 +787,12 @@ public static class BattleRules
         }
 
         // §4.3:被守护覆盖的目标,攻击与策略卡都不可指定(以排为目标的范围效果不受此限,见 CanTargetRow)
-        if (IsGuarded(target, out var guardian))
+        // ⚠ 只挡**敌方**的指定。友方增益 / 治疗 / 授予词条是"照顾自己人",
+        //   不能因为队友恰好站在守护单位旁边就加不上 —— 以前这里一刀切,
+        //   结果「犒赏」这类牌对着被守护的友军完全打不出去,看着就是"用了没反应"。
+        bool friendlyEffect = card.targetType == TacticTargetType.AllyUnit
+                           || card.targetType == TacticTargetType.AllyBuilding;
+        if (!friendlyEffect && IsGuarded(target, out var guardian))
         {
             reason = $"该目标受「{guardian.DisplayName}」守护保护";
             return false;
@@ -779,11 +821,22 @@ public static class BattleRules
         switch (card.targetType)
         {
             case TacticTargetType.EnemyRow:
-                if (row.Side != BattleSide.Enemy) { reason = "这张牌只能指定敌方排"; return false; }
+                // 前军是**双方共享**的一条排,它的 row.Side 恒为 Player ——
+                // 不能因为它"写着 Player"就禁止「敌方排」类效果:敌方单位真的会站在前军上。
+                // 这一排到底有没有可打的目标,由 CardEffectResolver.CanResolve 的 RowHasTarget 判。
+                if (row.Side != BattleSide.Enemy && row.RowType != BattleRowType.Front)
+                {
+                    reason = "这张牌只能指定敌方排";
+                    return false;
+                }
                 return true;
 
             case TacticTargetType.AllyRow:
-                if (row.Side != BattleSide.Player) { reason = "这张牌只能指定己方排"; return false; }
+                if (row.Side != BattleSide.Player && row.RowType != BattleRowType.Front)
+                {
+                    reason = "这张牌只能指定己方排";
+                    return false;
+                }
                 return true;
 
             default:

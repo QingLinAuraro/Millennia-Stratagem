@@ -19,6 +19,8 @@
   遗漏词条定价         —— 只列不改：基础表未定价/半定价条目的整理与建议
   卡池总览             —— 两朝数量与费用分布、平衡偏差统计（引用公式活算）
 """
+# ⚠ 已废弃（2026-10-31）：卡池改由 build_card_pool.py + build_card_pool_xlsx.py 生成。
+# 本脚本会重建旧《秦·卡池》《汉·卡池》《基准表外条目》并覆盖《卡池总览》，请勿再运行。
 import shutil, os
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side

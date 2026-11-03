@@ -107,6 +107,7 @@ public class BattleActionExecutor
         }
 
         carrier.RebuildLayout();
+        unit.MarkMoved();
         m.RefreshRaidFlags();
         m.RaiseBoardChanged();
 
@@ -145,6 +146,7 @@ public class BattleActionExecutor
             return false;
         }
 
+        if (attacker != null) attacker.MarkAttacked();
         m.RefreshRaidFlags();
         m.RaiseBoardChanged();
         return true;

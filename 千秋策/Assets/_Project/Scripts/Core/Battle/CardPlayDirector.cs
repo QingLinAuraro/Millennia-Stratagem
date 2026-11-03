@@ -66,9 +66,16 @@ public class CardPlayDirector
 
         m.RaycastHits(pointer, handCard);
 
-        return card.IsUnitCard
+        var result = card.IsUnitCard
             ? TryDeployUnit(handCard, card, pointer, out message)
             : TryPlayTactic(handCard, card, pointer, out message);
+
+        // 出牌失败以前只飘一句字(还可能飘在角落没看见),日志里一个字都没有 ——
+        // 事后排查"这张牌为什么放不下去"只能靠猜。统一落一条,下次直接看 Console。
+        if (result == CardPlayResult.Failed)
+            Debug.Log($"[出牌] 「{card.cardName}」({card.cardId}) 没能打出:{message}");
+
+        return result;
     }
 
     private CardPlayResult TryDeployUnit(CardDisplay handCard, CardData card, PointerEventData pointer, out string message)
@@ -180,6 +187,13 @@ public class CardPlayDirector
 
         if (unitTarget == null && rowTarget == null)
         {
+            // 兜底:射线没命中排(拖到排的空白处、那条排上刚好没人、或者被别的全屏 UI 挡在前面)时,
+            // 按"屏幕点落在哪条排的矩形里"再找一次。整排类效果不该因为落点没东西而放不出去。
+            rowTarget = FindRowUnderPointer(card, pointer);
+        }
+
+        if (unitTarget == null && rowTarget == null)
+        {
             // 弃置敌牌类:目标是敌方手牌区
             if (card.targetType == TacticTargetType.EnemyHand && m.IsInsideEnemyHandZone(pointer.position))
                 return ReleaseTactic(handCard, card, null, null, out message);
@@ -206,6 +220,29 @@ public class CardPlayDirector
         }
 
         return ReleaseTactic(handCard, card, unitTarget, rowTarget, out message);
+    }
+
+    /// <summary>
+    /// 指针落在哪条「合法的整排目标」上(按矩形包含判断,不依赖射线命中了什么)。
+    /// 只给整排类策略卡兜底用 —— 单位目标必须靠射线精确命中,不能靠矩形猜。
+    /// </summary>
+    private BattleRow FindRowUnderPointer(CardData card, PointerEventData pointer)
+    {
+        if (card == null || pointer == null) return null;
+
+        for (int i = 0; i < m.rows.Count; i++)
+        {
+            var row = m.rows[i];
+            if (row == null) continue;
+
+            var rect = row.transform as RectTransform;
+            if (rect == null) continue;
+
+            var camera = PrefabResolver.EventCameraFor(rect);
+            if (!RectTransformUtility.RectangleContainsScreenPoint(rect, pointer.position, camera)) continue;
+            if (BattleRules.CanTargetRow(card, row, out _)) return row;
+        }
+        return null;
     }
 
     private CardPlayResult ReleaseTactic(CardDisplay handCard, CardData card, FieldUnit unitTarget, BattleRow rowTarget, out string message)

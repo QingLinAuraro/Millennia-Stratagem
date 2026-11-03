@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 /// <summary>
 /// 单位 / 建筑生成与部署:所有 Instantiate 都收在这里。
@@ -114,7 +115,7 @@ public class UnitDeployer
         if (drag != null) drag.enabled = false;
 
         var cardRect = (RectTransform)view.transform;
-        ResizeSlot(slot, cardRect);      // 格子 = 卡面视觉尺寸(150×200 × 0.7 = 105×140)
+        ResizeSlot(slot);                // 格子 = 兵牌设计尺寸 × 缩放(150×200 × 0.7 = 105×140)
         FitInSlot(cardRect);             // 卡面摆在格子正中,整体等比缩小
 
         // 成员挂在格子上:排的链顺序 = 格子顺序,命中卡面时 GetComponentInParent 也能找到它
@@ -130,12 +131,24 @@ public class UnitDeployer
         unit.SetHeavyArmor(BattleRules.HeavyArmorLayers(card));
         m.buildingManager.ApplyArsenalPenalty(unit);
 
+        // 词条栏(卡面右上角外侧的小方块 + 长悬停面板)。
+        // 必须在 SetHeavyArmor 之后绑:它要按最终的层数画「重甲 ×N」;
+        // 绑的时机也是"卡面已经 Bind 过、单位数值已经定档"之后,读到的都是最终值。
+        var keywordBadge = view.gameObject.AddComponent<FieldKeywordBadge>();
+        keywordBadge.Bind(unit);
+
         row.AddUnit(unit, siblingIndex);
         return unit;
     }
 
-    /// <summary>生成一座建筑锚点(§2.3):它占容量、不可移动、不可被替换</summary>
-    public FieldUnit SpawnBuilding(BuildingSpec spec, BattleRow row)
+    /// <summary>
+    /// 生成一座建筑锚点(§2.3):它占容量、不可移动、不可被替换。
+    /// </summary>
+    /// <param name="overrideArtwork">
+    /// 临时替换的立绘(大营用:图片跟着卡组里那张大营卡走,见 BuildingManager.ResolveCampArtwork)。
+    /// 传 null 就用 spec 自己连的那张;spec 也没连就保留预制体的通用图。
+    /// </param>
+    public FieldUnit SpawnBuilding(BuildingSpec spec, BattleRow row, Sprite overrideArtwork = null)
     {
         var prefab = m.prefabs.ResolveBuildPrefab();
         if (prefab == null || spec == null || row == null) return null;
@@ -147,9 +160,13 @@ public class UnitDeployer
         var go = Object.Instantiate(prefab, slot);
         go.name = "Building_" + spec.displayName;
 
+        ApplyBuildingArtwork(go, overrideArtwork != null ? overrideArtwork : spec.artwork);
+
         // 把刚实例化的物体的 Transform 转换成 RectTransform（UI 物体必须是 RectTransform 才能参与布局）
         var buildRect = (RectTransform)go.transform;
-        ResizeSlot(slot, buildRect);
+
+        // 建筑占的格子**强制**和兵牌一样大(同一个常量算出来,见 ResizeSlot)
+        ResizeSlot(slot);
         FitInSlot(buildRect);
 
         var unit = slot.gameObject.AddComponent<FieldUnit>();
@@ -159,10 +176,28 @@ public class UnitDeployer
     }
 
     /// <summary>
-    /// 建一个布局格子。排上的 HorizontalLayoutGroup 按格子的 sizeDelta 排链,
-    /// 内容装在格子里再整体缩放 —— 这样布局只认"格子"这一个尺寸,
-    /// 卡面的字号/插画/角标一起等比缩小,不会被 rect 拉变形。
+    /// 把立绘换到预制体根上那颗 Image(角标是子物体上的另一颗 Image,不能一起改)。
+    /// 同时把颜色刷成纯白 —— 预制体根图原先带一点偏色,m_Sprite 一换就会把整张图染色。
     /// </summary>
+    private static void ApplyBuildingArtwork(GameObject go, Sprite artwork)
+    {
+        if (go == null || artwork == null) return;
+
+        // ⚠ 必须拿根上的:GetComponentInChildren 会先命中根,这里其实一样,
+        //   但角标那颗在子物体上,用 GetComponentInChildren 以后改层级会踩雷,直接 GetComponent 最稳
+        var image = go.GetComponent<Image>();
+        if (image == null) return;
+
+        image.sprite = artwork;
+        image.color = Color.white;
+        image.type = Image.Type.Simple;
+        image.preserveAspect = false;      // 铺满卡位,与兵牌同尺寸
+    }
+
+    /// <summary>战场卡的设计尺寸,兵牌与建筑共用。格子 = 它 × fieldCardScale(= 105×140)</summary>
+    private static readonly Vector2 FieldCardDesignSize = new Vector2(150f, 200f);
+
+    /// <summary>建一个布局格子。排上的 HorizontalLayoutGroup 按格子的 sizeDelta 排链,内容装在格子里再整体缩放</summary>
     private RectTransform CreateSlot(BattleRow row, int siblingIndex, string objectName)
     {
         var go = new GameObject(objectName, typeof(RectTransform));
@@ -170,17 +205,15 @@ public class UnitDeployer
         rt.SetParent(row.transform, false);
         rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);    // 布局组随后会写成 (0,1)
         rt.pivot = new Vector2(0.5f, 0.5f);
-        rt.sizeDelta = new Vector2(105f, 140f);                   // 兜底值,紧接着会被 ResizeSlot 覆盖
+        rt.sizeDelta = FieldCardDesignSize * m.fieldCardScale;    // 兵牌与建筑同一个尺寸
         rt.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, row.transform.childCount - 1));
         return rt;
     }
 
-    // 把创建的格子尺寸调整为建筑的视觉尺寸
-    private void ResizeSlot(RectTransform slot, RectTransform content)
+    /// <summary>把格子尺寸统一成"兵牌的设计尺寸 × 缩放"。兵牌、建筑走同一条,不量各自的预制体</summary>
+    private void ResizeSlot(RectTransform slot)
     {
-        var design = content != null ? content.rect.size : Vector2.zero;
-        if (design.x <= 0f || design.y <= 0f) design = new Vector2(150f, 200f);
-        slot.sizeDelta = design * m.fieldCardScale;
+        slot.sizeDelta = FieldCardDesignSize * m.fieldCardScale;
     }
 
     /// <summary>把内容摆进格子正中:保持预制体的设计尺寸,整体等比缩放填满格子</summary>

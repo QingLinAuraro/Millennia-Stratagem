@@ -13,6 +13,10 @@ public enum CardEffectKind
     [Description("召唤(牌堆)")] Summon,           // 召唤:往牌堆里加一张牌(§4.3 召唤(牌堆))
     [Description("费用上限+N")] RaiseCpMax,       // 过费类(数据表:固定3费卡=N1 / 固定5费卡=N2);抬**上限**,走硬顶 24
     [Description("回复N点费用")] RefundCp,        // 回费类(数据表:x-2 费卡回复 x,2<=x<=5);补**当前费用**,不许回超上限
+    [Description("设置ATK")] SetAtk,              // 等价类:把目标 ATK 调到 amount(敌ATK调1)
+    [Description("两敌互击")] TradeBlows,         // 指定两个敌方单位互相攻击一次
+    [Description("消灭")] Destroy,                // 消灭目标(消灭指定/斩首)
+    [Description("授予词条")] GrantKeyword,       // 后置授予一个 Keywords 词条(血战/守护/重甲1)
 }
 
 /// <summary>效果的结算范围:打谁 / 加谁 / 回谁</summary>
@@ -25,6 +29,8 @@ public enum CardEffectScope
     [Description("指定整排")] Row,         // 指定的整排(以排为目标的范围效果,无视守护,§4.3)
     [Description("出牌方")] Caster,        // 出牌方自己(「为一座己方建筑回复 HP」这类无目标回血走这条)
     [Description("自动挑选")] Auto,        // 由结算器自动挑一个最合适的目标(多目标卡的第 2/3 个目标、支援卡的部署增益)
+    [Description("敌方攻击力最高")] StrongestEnemy, // 斩首:自动挑敌方 ATK 最高的单位
+    [Description("指定两排")] TwoRows,      // 双排伤害:主目标排 + 自动挑另一排
 }
 
 /// <summary>
@@ -37,6 +43,19 @@ public enum CardEffectTargetSlot
     [Description("第一目标(玩家指定)")] Primary,     // 第一个目标 = 玩家拖过去指定的那个(CardData.targetType 里登记的就是它)
     [Description("第二目标(自动)")] Secondary,       // 第二个目标 = 自动挑(例如「对指定一排单位造成2点伤害」的那一排)
     [Description("第三目标(自动)")] Tertiary,        // 第三个目标 = 自动挑
+}
+
+/// <summary>
+/// 条件效果:不满足条件时整条效果跳过(§4.3 策略卡扩展)。
+/// 目前只做「根据场上情况」这一小类:敌方单位数、己方大营血量、敌方手牌数。
+/// </summary>
+public enum CardEffectCondition
+{
+    [Description("无")] None,
+    [Description("敌方单位数多于己方")] EnemyUnitsMore,
+    [Description("敌方单位数≥N")] EnemyUnitsAtLeast,
+    [Description("己方大营HP≤N")] CampHpAtMost,
+    [Description("敌方手牌≥N")] EnemyHandAtLeast,
 }
 
 /// <summary>
@@ -98,6 +117,15 @@ public class CardEffect
     /// <summary>kind == Summon 时:加几张</summary>
     public int summonCount { get; private set; } = 1;
 
+    /// <summary>条件效果:不满足时整条效果跳过(见 CardEffectCondition)</summary>
+    public CardEffectCondition condition { get; private set; } = CardEffectCondition.None;
+
+    /// <summary>条件效果的比较值(敌方单位数≥N / 大营HP≤N / 敌方手牌≥N)</summary>
+    public int conditionValue { get; private set; }
+
+    /// <summary>kind == GrantKeyword 时:授予哪个词条</summary>
+    public Keyword keyword { get; private set; } = Keyword.Blitz;
+
     // 私有构造函数,禁止外部直接创建 —— 统一走 Create / 下面的语义化工厂方法
     private CardEffect() { }
 
@@ -111,7 +139,10 @@ public class CardEffect
         int hpValue = 0,
         string summonCardId = null,
         int summonCount = 1,
-        int durationRounds = 0)
+        int durationRounds = 0,
+        CardEffectCondition condition = CardEffectCondition.None,
+        int conditionValue = 0,
+        Keyword keyword = Keyword.Blitz)
     {
         return new CardEffect
         {
@@ -124,6 +155,9 @@ public class CardEffect
             summonCardId = summonCardId,
             summonCount = summonCount,
             durationRounds = durationRounds,
+            condition = condition,
+            conditionValue = conditionValue,
+            keyword = keyword,
         };
     }
 
@@ -148,6 +182,10 @@ public class CardEffect
             case CardEffectKind.Summon:       return $"召唤「{summonCardId}」×{summonCount} 进牌堆";
             case CardEffectKind.RaiseCpMax:   return amount >= 0 ? $"费用上限 +{amount}" : $"费用上限 {amount}";
             case CardEffectKind.RefundCp:     return $"回复 {amount} 点费用";
+            case CardEffectKind.SetAtk:       return $"{ScopeName(scope)} ATK 调到 {amount}";
+            case CardEffectKind.TradeBlows:   return "指定两个敌方单位互相攻击一次";
+            case CardEffectKind.Destroy:      return $"消灭{ScopeName(scope)}";
+            case CardEffectKind.GrantKeyword: return $"授予{ScopeName(scope)}「{keyword}」";
             default:                          return "（无效果）";
         }
     }
@@ -160,6 +198,8 @@ public class CardEffect
         CardEffectScope.Row      => "指定排",
         CardEffectScope.Caster   => "出牌方",
         CardEffectScope.Auto     => "自动挑选的",
+        CardEffectScope.StrongestEnemy => "敌方攻击力最高的单位",
+        CardEffectScope.TwoRows  => "指定两排",
         _                        => "目标",
     };
 
@@ -224,6 +264,32 @@ public class CardEffect
     /// </summary>
     public static CardEffect RefundCp(int amount)
         => Create(CardEffectKind.RefundCp, amount, CardEffectScope.Caster);
+
+    // ===== 策略卡扩展效果(2026-10-31) =====
+
+    /// <summary>等价类:把目标 ATK 调到 amount(数据表「将对方任意单位的 ATK 调整到 1」)</summary>
+    public static CardEffect SetAtk(int atk)
+        => Create(CardEffectKind.SetAtk, atk, CardEffectScope.Target);
+
+    /// <summary>两敌互击:指定一个敌方单位,再自动挑另一个敌方单位,双方各按自身 ATK 互打一次</summary>
+    public static CardEffect TradeBlows()
+        => Create(CardEffectKind.TradeBlows, 0, CardEffectScope.Target);
+
+    /// <summary>消灭:Scope.Target = 消灭指定;Scope.Random = 消灭随机</summary>
+    public static CardEffect Destroy(CardEffectScope scope = CardEffectScope.Target)
+        => Create(CardEffectKind.Destroy, 0, scope);
+
+    /// <summary>后置授予词条:血战 / 守护 / 连战 / 闪击(重甲走 SetHeavyArmor,不走这条)</summary>
+    public static CardEffect GrantKeyword(Keyword keyword)
+        => Create(CardEffectKind.GrantKeyword, 0, CardEffectScope.Target, keyword: keyword);
+
+    /// <summary>给效果挂条件(不满足时整条跳过)</summary>
+    public CardEffect When(CardEffectCondition c, int value = 0)
+    {
+        condition = c;
+        conditionValue = value;
+        return this;
+    }
 }
 
 /// <summary>

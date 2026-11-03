@@ -921,7 +921,7 @@ public class EnemyAI : MonoBehaviour
         // 守护单位本身永远可选(守护之间不互保),所以它经常是**唯一**能打的那一个。
         // 打掉它 = 解开左右紧邻的保护,这是有额外价值的,否则 AI 会觉得"只有这一个能打"
         // 而把行动力浪费在别处。
-        if (BattleRules.HasKeyword(target.Data, Keyword.Guard) && kills && !dies)
+        if (BattleRules.HasKeyword(target, Keyword.Guard) && kills && !dies)
             score += 40;
 
         // 兜底:半血交换在抢血姿态下可能被乘成 0 或负数,拉回"至少比空过强"

@@ -3,28 +3,56 @@ using System.Text;
 using UnityEngine;
 
 /// <summary>
-/// 一套卡组的稀有度配额(策划案§5.2)。
+/// 一套卡组的稀有度**上限**(策划案§5.2)。
+///
+/// 为什么是上限而不是"正好几张":
+///   规则只关心「别把一套牌堆成四张传说」,不关心玩家到底塞了几张普通卡 ——
+///   卡组总张数由 DeckPreset.DeckSize 卡死,普通位天然就是"剩下多少全归我",
+///   所以四档里只有三档需要真正设限,普通那一档填 39(= 40 张减掉大营那 1 张)即可。
+///   如果按"正好几张"来卡,玩家想多带两张稀有卡、少带两张普通卡都算非法 —— 没有必要。
+///
+/// 大营卡**不计入**这里的任何一档:它是固定位,开局必带 1 张,不进稀有度统计
+/// (见 ValidateCards 里 `cardType == Building` 直接 continue 的那一段)。
 ///
 /// 为什么单独一个可序列化类,而不是写死在 DeckPreset 里:
-/// 配额是**规则**,将来调平衡(比如「传说放宽到 3 张」)只改资产上的数字,不用动代码;
-/// 而且 Inspector 上看得见,不至于每次都要翻策划案。
+///   上限是**规则**,将来调平衡(比如「传说放宽到 6 张」)只改资产上的数字,不用动代码;
+///   而且 Inspector 上看得见,不至于每次都要翻策划案。
 /// </summary>
 [System.Serializable]
 public class DeckQuota
 {
-    [Tooltip("普通卡张数")]
-    public int ordinary = 12;
-    [Tooltip("稀有卡张数")]
-    public int rare = 8;
-    [Tooltip("史诗卡张数")]
-    public int epic = 4;
-    [Tooltip("传说卡张数")]
-    public int legend = 2;
-    [Tooltip("任意品质的弹性位(只能填普通/稀有/史诗,不能填传说)")]
-    public int flexible = 4;
+    [Tooltip("普通卡张数上限(默认 39 = 40 张减去 1 张大营,等于「普通卡没有实际限制」)")]
+    public int maxOrdinary = 39;
+    [Tooltip("稀有卡张数上限")]
+    public int maxRare = 12;
+    [Tooltip("史诗卡张数上限")]
+    public int maxEpic = 8;
+    [Tooltip("传说卡张数上限")]
+    public int maxLegend = 4;
 
-    /// <summary>硬性总张数 = 各档之和(12+8+4+2+4 = 30,策划案§5.1)</summary>
-    public int Total => ordinary + rare + epic + legend + flexible;
+    /// <summary>这一档的**上限**。英雄档不占位(cardType 里没有这种卡),出现就是多余,按 0 处理</summary>
+    public int MaxOf(Rarity rarity) => rarity switch
+    {
+        Rarity.Ordinary => maxOrdinary,
+        Rarity.Rare => maxRare,
+        Rarity.Epic => maxEpic,
+        Rarity.Legend => maxLegend,
+        _ => 0,
+    };
+
+    /// <summary>
+    /// 目标构筑(不是规则,只是**建议分配**):4 传说 + 8 史诗 + 12 稀有 + 15 普通 = 39。
+    /// 上限吃满前三档、剩下全给普通,正好铺满 40 张里的 39 个非大营位。
+    /// 给 DeckRandomizer(AI 随机筑)和 DeckAssetGenerator(两套默认卡组)当铺牌方案用。
+    /// </summary>
+    public int TargetOf(Rarity rarity) => rarity switch
+    {
+        Rarity.Ordinary => 15,
+        Rarity.Rare => 12,
+        Rarity.Epic => 8,
+        Rarity.Legend => 4,
+        _ => 0,
+    };
 }
 
 /// <summary>
@@ -43,10 +71,11 @@ public class DeckQuota
 ///         主菜单是用 Resources.LoadAll&lt;DeckPreset&gt;("Decks") 拿卡组列表的。
 ///         右键 Create → 千秋策 → 卡组 可以手建;两套默认卡组由 DeckAssetGenerator 自动生成。
 ///   引用:Cards 手拖,或者用编辑器菜单「千秋策/卡组/重新生成两套默认卡组」生成。
-///   常调:· Cards:卡组内容。**不要往里拖建筑(大营/军械库/粮草)** —— 建筑由
-///           BuildingManager 开局按固定表摆,不进牌堆(见 DeckController 的说明)。
-///         · quota:稀有度配额,见 DeckQuota。
-///   自检:IsValid() 会把"张数不对 / 稀有度配额不符 / 同名超限 / 朝代混编违规"逐条列出来。
+///   常调:· Cards:卡组内容。**必须带正好 1 张大营卡**(cardType = Building)——
+///           它只占一个位置、决定战场大营用哪张图,不进牌堆,也不计入稀有度上限;
+///           军械库/粮草**不是卡**,由 BuildingManager 开局按固定表摆。
+///         · quota:稀有度**上限**,见 DeckQuota。
+///   自检:IsValid() 会把"张数不对 / 稀有度超上限 / 同名超限 / 朝代混编违规 / 大营不是 1 张"逐条列出来。
 ///         EditorDeckTools 的菜单「千秋策/卡组/校验全部卡组」会对着所有资产跑一遍。
 /// </summary>
 [CreateAssetMenu(fileName = "NewDeck", menuName = "千秋策/卡组")]
@@ -55,25 +84,25 @@ public class DeckPreset : ScriptableObject
     [Header("身份")]
     [Tooltip("卡组名,显示在主菜单的卡组列表里")]
     public string deckName = "新卡组";
-    [Tooltip("主朝代(策划案§5.3.1:主朝代卡不少于 25 张)")]
+    [Tooltip("主朝代(策划案§5.3.1:主朝代卡不少于 29 张)")]
     public string primaryDynasty = "汉";
     [Tooltip("一句话说明(卡组定位,显示在卡组名下面)")]
     [TextArea] public string description;
 
     [Header("构筑")]
-    [Tooltip("卡组内容,共 30 张(§5.1)。可以重复同一张卡,同名上限见 quota / §5.2")]
+    [Tooltip("卡组内容,共 40 张 = 39 张可构筑 + 1 张大营(§5.1)。可以重复同一张卡,同名上限见 MaxCopiesOf")]
     public List<CardData> cards = new List<CardData>();
 
     [Header("规则(策划案§5)")]
-    [Tooltip("稀有度配额(§5.2)")]
+    [Tooltip("稀有度上限(§5.2):普通 39 / 稀有 12 / 史诗 8 / 传说 4,大营不计入")]
     public DeckQuota quota = new DeckQuota();
 
     // ================================================================ 规则常量(§5)
 
-    /// <summary>卡组总张数(§5.1)</summary>
-    public const int DeckSize = 30;
+    /// <summary>卡组总张数(§5.1):39 张可构筑 + 1 张固定大营</summary>
+    public const int DeckSize = 40;
     /// <summary>主朝代卡的下限(§5.3.1)</summary>
-    public const int PrimaryDynastyMin = 25;
+    public const int PrimaryDynastyMin = 29;
     /// <summary>次朝代卡的上限(§5.3.2)</summary>
     public const int SecondaryDynastyMax = 5;
 
@@ -85,16 +114,6 @@ public class DeckPreset : ScriptableObject
         Rarity.Epic => 2,
         Rarity.Legend => 1,
         _ => 1,          // Hero(英雄):还没用过这一档,按最严处理,免得漏判
-    };
-
-    /// <summary>这张卡属于哪一档配额</summary>
-    private static int QuotaOf(DeckQuota q, Rarity rarity) => rarity switch
-    {
-        Rarity.Ordinary => q.ordinary,
-        Rarity.Rare => q.rare,
-        Rarity.Epic => q.epic,
-        Rarity.Legend => q.legend,
-        _ => 0,          // 英雄档不占配额(卡池里没有),出现就是多余的
     };
 
     public int CardCount => cards != null ? cards.Count : 0;
@@ -121,19 +140,22 @@ public class DeckPreset : ScriptableObject
         }
 
         // ---- 张数(§5.1) ----
-        int expected = quota.Total;
+        int expected = DeckSize;
         if (cards.Count != expected)
             problems.Add($"共 {cards.Count} 张,规则要求 {expected} 张(§5.1)");
 
-        // ---- 稀有度配额 + 同名 + 朝代混编 ----
+        // ---- 稀有度上限 + 同名 + 朝代混编 ----
         var byRarity = new Dictionary<Rarity, int>();
         var byCard = new Dictionary<CardData, int>();
-        int primary = 0, secondary = 0, legendFromSecondary = 0;
+        int primary = 0, secondary = 0, legendFromSecondary = 0, camps = 0;
 
         for (int i = 0; i < cards.Count; i++)
         {
             var c = cards[i];
             if (c == null) { problems.Add($"第 {i + 1} 个位置是空的"); continue; }
+
+            // 大营卡是"固定位":不占稀有度上限,也不参与朝代混编统计(它本来就是主朝代的)
+            if (c.cardType == CardType.Building) { camps++; continue; }
 
             byRarity.TryGetValue(c.rarity, out int rc);
             byRarity[c.rarity] = rc + 1;
@@ -150,22 +172,19 @@ public class DeckPreset : ScriptableObject
             }
         }
 
-        // 弹性位只能被普通/稀有/史诗占用,所以这三档允许在 [配额, 配额+弹性位] 之间
+        // 稀有度只设上限,不设下限(§5.2):不是"必须正好 4 张传说",而是"最多 4 张"。
+        // 少带传说完全合法 —— 少出来的位置自然被普通卡填满(总张数已经由上面卡死)。
         foreach (var kv in byRarity)
         {
             int got = kv.Value;
-            int want = QuotaOf(quota, kv.Key);
-            int flexibleRoom = IsElastic(kv.Key) ? quota.flexible : 0;
-            if (got < want)
-                problems.Add($"{RarityName(kv.Key)} {got} 张,少于配额 {want} 张(§5.2)");
-            else if (got > want + flexibleRoom)
-                problems.Add($"{RarityName(kv.Key)} {got} 张,超出配额 {want}(弹性位最多再塞 {flexibleRoom} 张,§5.2)");
+            int limit = quota.MaxOf(kv.Key);
+            if (got > limit)
+                problems.Add($"{RarityName(kv.Key)} {got} 张,超过上限 {limit} 张(§5.2)");
         }
 
-        // 传说一张都不能少:它是唯一不许被弹性位替代的档(§5.2「4任意普通/稀有/史诗」)
-        byRarity.TryGetValue(Rarity.Legend, out int legends);
-        if (legends != quota.legend)
-            problems.Add($"传说 {legends} 张,必须正好 {quota.legend} 张(§5.2)");
+        // ---- 大营固定位 ----
+        if (camps != 1)
+            problems.Add($"大营卡 {camps} 张,卡组必须正好带 1 张大营卡");
 
         // ---- 同名上限(§5.2) ----
         foreach (var kv in byCard)
@@ -186,11 +205,6 @@ public class DeckPreset : ScriptableObject
         return problems.Count == 0;
     }
 
-    /// <summary>这一档能不能占用弹性位(§5.2:只有「4 张任意普通/稀有/史诗」这三种能占)</summary>
-    private static bool IsElastic(Rarity rarity)
-        => rarity == Rarity.Ordinary || rarity == Rarity.Rare || rarity == Rarity.Epic;
-
-
     /// <summary>把这份构筑摊成一行行文字(卡组详情面板 / 校验日志用)</summary>
     public string Describe()
     {
@@ -198,21 +212,25 @@ public class DeckPreset : ScriptableObject
         sb.Append($"{deckName}(主{primaryDynasty}, {CardCount} 张)");
 
         var byRarity = new Dictionary<Rarity, int>();
-        int primary = 0, secondary = 0;
+        int primary = 0, secondary = 0, camps = 0;
         for (int i = 0; i < CardCount; i++)
         {
             var c = cards[i];
             if (c == null) continue;
+            // 大营不计入稀有度统计(和 ValidateCards 同一套口径)
+            if (c.cardType == CardType.Building) { camps++; continue; }
+
             byRarity.TryGetValue(c.rarity, out int rc);
             byRarity[c.rarity] = rc + 1;
             if (c.dynasty == primaryDynasty) primary++; else secondary++;
         }
 
-        sb.Append($"\n  主朝 {primary} / 次朝 {secondary}");
+        sb.Append($"\n  主朝 {primary} / 次朝 {secondary} · 大营 {camps}");
+        var q = quota ?? new DeckQuota();
         foreach (Rarity r in new[] { Rarity.Ordinary, Rarity.Rare, Rarity.Epic, Rarity.Legend })
         {
             byRarity.TryGetValue(r, out int n);
-            sb.Append($" · {RarityName(r)} {n}");
+            sb.Append($" · {RarityName(r)} {n}/{q.MaxOf(r)}");
         }
         return sb.ToString();
     }

@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bfcf2cc80a34fa94dadbc55e6db77a79, type: 3}
+  m_Name: gen_t_04
+  m_EditorClassIdentifier: 
+  cardId: gen_t_04
+  cardName: 擒贼擒王
+  dynasty: 通用
+  rarity: 0
+  cardType: 1
+  artwork: {fileID: 21300000, guid: 2e7826ea752bc77d30b5f851a2a5eda6, type: 3}
+  flavorText: 
+  effectText: 对敌方攻击力最高的单位造成3点伤害
+  deploymentCost: 3
+  actionCost: 0
+  actionCount: 0
+  atk: 0
+  hp: 0
+  unitType: 4
+  weight: 0
+  keywords: []
+  targetType: 0

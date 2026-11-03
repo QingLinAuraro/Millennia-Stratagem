@@ -6,7 +6,8 @@ using System.ComponentModel;
 public enum CardType 
 { 
     [Description("单位")] Unit, 
-    [Description("策略")] Tactic 
+    [Description("策略")] Tactic,
+    [Description("建筑")] Building   // 大营卡:不进战场当单位摆,只用来固定卡组里的 1 个位置并决定大营样式
 }
 public enum UnitType 
 {
@@ -81,7 +82,7 @@ public class CardData : ScriptableObject
     [Header("费用")]
     public int deploymentCost = 1;             // 部署费用
     public int actionCost = 1;       // 行动费用(策略卡忽略)
-    public int actionCount = 1;      // 行动次数(策略卡忽略)
+    public int actionCount = 1;      // 行动次数（AP 上限）：骑兵 2 = 移动+攻击；连战 2 = 攻击×2；其余 1 = 攻击或移动
 
     [Header("卡牌属性")]
     public int atk = 1;   // 攻击力，策略卡忽略

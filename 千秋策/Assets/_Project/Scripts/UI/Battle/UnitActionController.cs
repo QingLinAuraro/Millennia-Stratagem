@@ -1084,7 +1084,10 @@ public class UnitActionController : MonoBehaviour
         AfterAction();
     }
 
-    /// <summary>单位行动之后:AP 用完就自动取消选中,否则保持选中(连战 / 骑兵能连着走两步)</summary>
+    /// <summary>
+    /// 单位行动之后:还有合法行动(移动/攻击模式有余量)就保持选中,否则取消。
+    /// 骑兵走完还能打、打完还能走;连战没打完可以再打;非连战非骑兵行动一次就结束。
+    /// </summary>
     private void AfterAction()
     {
         if (selected == null) return;
@@ -1096,7 +1099,7 @@ public class UnitActionController : MonoBehaviour
             return;
         }
 
-        if (selected.Ap <= 0)
+        if (!selected.CanActNow)
         {
             ClearSelection();
             return;

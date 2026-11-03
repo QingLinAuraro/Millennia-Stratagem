@@ -13,7 +13,18 @@ public class Deck
     public void Init(IEnumerable<CardData> list)
     {
         cards.Clear();
-        cards.AddRange(list);
+        if (list != null)
+        {
+            foreach (var card in list)
+            {
+                // 大营卡(cardType = Building)是**固定位**,不是能打出去的牌:
+                // 它只负责"这套卡组带的是秦大营还是汉大营",用来决定战场大营的立绘。
+                // 卡组资产里必须有它(校验要求正好 1 张),但牌堆里不能有它 ——
+                // 过滤放在 Init 里最省事:我方 DeckController 与敌方 EnemyDeckController 都走这里。
+                if (card == null || card.cardType == CardType.Building) continue;
+                cards.Add(card);
+            }
+        }
         Shuffle();
     }
 

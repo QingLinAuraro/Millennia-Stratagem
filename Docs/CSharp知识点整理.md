@@ -1,6 +1,6 @@
 # 千秋策 · C# 知识点整理
 
-> 按项目里**实际用到**的语法来整理，每条都给出真实代码出处（`文件:行号`），可以直接跳过去对着看。
+> 按项目里**实际用到**的语法来整理，每条都给出真实代码出处（`文件:行号`），可以直接跳过去对着看。  
 > 语言版本：**C# 9.0 / netstandard2.1**（`Assembly-CSharp.csproj` 里的 `LangVersion`，由 Unity 2022.3 决定）。
 
 ## 目录
@@ -23,14 +23,14 @@
 
 ## 0. 语言版本基线
 
-| 项 | 值 | 说明 |
-|---|---|---|
-| `LangVersion` | `9.0` | C# 9 及以前的语法都能用 |
-| `TargetFramework` | `netstandard2.1` | Unity 的脚本程序集目标 |
-| 可空引用类型 | 未开启 | 所以 `string?` 这类**引用类型**注解不可用；`Color?` 这种**值类型**可空是另一回事，见 §1.6 |
-| 安全代码 | `AllowUnsafeBlocks = False` | 不能写 `unsafe` / 指针 |
+| 项                 | 值                           | 说明                                                            |
+| ----------------- | --------------------------- | ------------------------------------------------------------- |
+| `LangVersion`     | `9.0`                       | C# 9 及以前的语法都能用                                                |
+| `TargetFramework` | `netstandard2.1`            | Unity 的脚本程序集目标                                                |
+| 可空引用类型            | 未开启                         | 所以 `string?` 这类**引用类型**注解不可用；`Color?` 这种**值类型**可空是另一回事，见 §1.6 |
+| 安全代码              | `AllowUnsafeBlocks = False` | 不能写 `unsafe` / 指针                                             |
 
-**能用**：`var`、目标类型 `new()`、模式匹配、`switch` 表达式、`??=`、`?.`、`out var`、表达式体成员、`record`、`init`、局部函数。
+**能用**：`var`、目标类型 `new()`、模式匹配、`switch` 表达式、`??=`、`?.`、`out var`、表达式体成员、`record`、`init`、局部函数。  
 **不能用**：文件作用域命名空间（`namespace X;`）、全局 `using`、`required`、`record struct`、字符串插值里的换行 —— 这些是 C# 10/11 的。
 
 ---
@@ -60,11 +60,11 @@ public const int CpMaxLimit = 24;
 private static readonly Dictionary<GameEventType, Delegate> eventDict = new();
 ```
 
-| | `const` | `static readonly` |
-|---|---|---|
-| 求值时机 | 编译期，值直接写进调用方 | 运行期，静态构造时 |
-| 能放什么 | 只有基元类型 / `string` / `null` | 任意类型，可以 `new` 一个集合 |
-| `const` 的坑 | 值被复制到调用方，改了要**全部重新编译** | 没这个问题 |
+|            | `const`                    | `static readonly`  |
+| ---------- | -------------------------- | ------------------ |
+| 求值时机       | 编译期，值直接写进调用方               | 运行期，静态构造时          |
+| 能放什么       | 只有基元类型 / `string` / `null` | 任意类型，可以 `new` 一个集合 |
+| `const` 的坑 | 值被复制到调用方，改了要**全部重新编译**     | 没这个问题              |
 
 所以集合一律 `static readonly`，数字常量才 `const`。
 
@@ -179,6 +179,7 @@ public string Describe()
 ```
 
 两个细节：
+
 - `case` 里要**声明变量**时必须加一对 `{ }`（上面 `Buff` 那支），否则报"不能在 switch 段里声明同名变量"。
 - 每个分支都以 `return` 结束，所以不需要 `break`（C# 不允许"贯穿到下一个 case"，漏写 `break` 且不返回会直接编译错误）。
 
@@ -254,11 +255,11 @@ DescriptionAttribute attribute =
     Attribute.GetCustomAttribute(field, typeof(DescriptionAttribute)) as DescriptionAttribute;
 ```
 
-| | `as` | `(T)` |
-|---|---|---|
-| 失败结果 | `null` | 抛异常 |
-| 适用 | 引用类型 / 可空值类型 | 所有类型 |
-| 什么时候用 | "可能是，也可能不是" | "我确定它就是" |
+|       | `as`         | `(T)`    |
+| ----- | ------------ | -------- |
+| 失败结果  | `null`       | 抛异常      |
+| 适用    | 引用类型 / 可空值类型 | 所有类型     |
+| 什么时候用 | "可能是，也可能不是"  | "我确定它就是" |
 
 ### 1.12 可空运算符 `?.`、`??`、`??=`
 
@@ -325,6 +326,7 @@ private int roundNumber;        // 轮次:双方各走一次算一轮
 ```
 
 项目约定：
+
 - **`[SerializeField] private`** 给 Inspector 看的字段用小驼峰（`cardPrefab`、`startingCpMax`）。
 - **`public` 对外暴露的**用大驼峰（`Cp`、`CpMax`）。
 - 私有字段没有 `_` 前缀，直接小驼峰 —— 靠访问修饰符区分。
@@ -348,10 +350,10 @@ public static CardHoverPreview Instance { get; private set; }
 
 三种形态：
 
-| 写法 | 意思 |
-|---|---|
-| `public int X => expr;` | 只读，每次访问都**重新计算**，不占存储 |
-| `public int X { get; private set; }` | 自动属性，外部只读、内部可写 |
+| 写法                                     | 意思                                      |
+| -------------------------------------- | --------------------------------------- |
+| `public int X => expr;`                | 只读，每次访问都**重新计算**，不占存储                   |
+| `public int X { get; private set; }`   | 自动属性，外部只读、内部可写                          |
 | `public int X { get; protected set; }` | 派生类也能写（`Core/Events/EventManger.cs:15`） |
 
 > `Instance { get; private set; }` 是单例的简洁写法，比手写 `get { return instance; }` 短。
@@ -395,6 +397,7 @@ private static List<BuildingSpec> DefaultBuildings() => new()
 };
 ```
 
+
 ### 2.4 静态成员与静态类
 
 ```csharp
@@ -419,6 +422,7 @@ public static class GameBootstrap
 ```
 
 项目里 `static` 用得**很克制**，只有两类：
+
 1. 纯工具 / 全局注册表（`EventManager`、`EnumExtensions`、`BattleRules`、`CardEffectDatabase`）。
 2. 单例的 `Instance` 属性。
 
@@ -465,12 +469,12 @@ public abstract class GameEventArgs
 
 ### 3.2 访问修饰符
 
-| 修饰符 | 谁能访问 | 项目里的例子 |
-|---|---|---|
-| `public` | 所有人 | `public int Cp => ...` |
-| `private` | 只有本类 | `private Side currentSide` |
+| 修饰符         | 谁能访问     | 项目里的例子                              |
+| ----------- | -------- | ----------------------------------- |
+| `public`    | 所有人      | `public int Cp => ...`              |
+| `private`   | 只有本类     | `private Side currentSide`          |
 | `protected` | 本类 + 派生类 | `EventType { get; protected set; }` |
-| `internal` | 同一程序集 | 项目没用（全在一个 `Assembly-CSharp` 里，没意义） |
+| `internal`  | 同一程序集    | 项目没用（全在一个 `Assembly-CSharp` 里，没意义）  |
 
 默认值：类成员默认 `private`，类本身默认 `internal`。项目里**一律显式写出来**，不靠默认。
 
@@ -613,6 +617,7 @@ public IReadOnlyList<RectTransform> Cards => cards;
 ```
 
 **不要**直接把 `List` 字段 `public` 出去。给 `IReadOnlyList<T>` 之后：
+
 - 外面能 `for` 遍历、能 `.Count`；
 - 但**不能** `Add` / `Clear` / 下标赋值 —— 集合只能由本类改。
 
@@ -681,11 +686,11 @@ public event Action<int, int> CpChanged;
 public event Action SettingsClicked;
 ```
 
-| 类型 | 签名 |
-|---|---|
-| `Action` | `void ()` |
-| `Action<T1, T2>` | `void (T1, T2)` |
-| `Func<T, TResult>` | `TResult (T)` |
+| 类型                 | 签名              |
+| ------------------ | --------------- |
+| `Action`           | `void ()`       |
+| `Action<T1, T2>`   | `void (T1, T2)` |
+| `Func<T, TResult>` | `TResult (T)`   |
 
 项目一律用内置的 `Action` / `Func`，**不自定义 `delegate` 类型**，少一层绕。
 
@@ -696,6 +701,7 @@ public event Action<bool, int> TurnStarted;
 ```
 
 `event` 比裸的 `Action` 字段多了两条保护：
+
 1. 外部**只能** `+=` / `-=`，不能 `=` 覆盖（`TurnStarted = null` 编译不过，防止把别人的订阅清掉）；
 2. 外部**不能**直接 `Invoke`，只能由声明它的类触发。
 
@@ -726,6 +732,7 @@ private void UnhookTurn()
 **为什么重要**：委托会**持有目标对象的引用**。只订阅不退订，被销毁的对象不会被 GC 回收，而且下一局会**重复收到事件**。
 
 项目里的标准模板：
+
 - `OnEnable` 订阅、`OnDisable` 退订（`BattleResultUI.cs:66-68`、`HandUI.cs:88-93`、`CardDragPlay.cs:90-101`）；
 - **加一个 `hooked` 布尔**防止重复订阅（`+=` 两次会**调用两次**，这是新手最常见的 bug）。
 
@@ -737,6 +744,7 @@ TurnStarted?.Invoke(side == Side.Local, sideTurn);
 ```
 
 `?.Invoke(...)` 是触发事件的**标准写法**：
+
 - 等价于 `if (TurnStarted != null) TurnStarted(...)`；
 - 但有微妙区别 —— `?.` 先读一次字段，多线程下更安全（虽然 Unity 主线程用不上）。
 
@@ -770,6 +778,7 @@ public static void Trigger<T>(T args) where T : GameEventArgs
 ```
 
 知识点：
+
 - **`Delegate` 是所有委托的基类**。存进 `Dictionary<,>` 只能声明成 `Delegate`，取出来要 `as Action<T>` 转回具体类型才能 `Invoke`。
 - **`Delegate.Combine` / `Delegate.Remove`** 就是 `+=` / `-=` 的底层实现，手动调用是为了在**运行时**操作（`+=` 必须编译期知道是哪个字段）。
 - **`Delegate.Remove` 移除最后一个订阅者后会变成 `null`**，所以 `Trigger` 里必须判空（用 `?.` 就顺带做了）。
@@ -791,13 +800,14 @@ public static void Subscribe<T>(GameEventType type, Action<T> listener) where T 
 
 常见约束：
 
-| 约束 | 含义 |
-|---|---|
-| `where T : class` | 必须是引用类型 |
-| `where T : struct` | 必须是值类型 |
-| `where T : new()` | 必须有无参构造（才能 `new T()`） |
-| `where T : GameEventArgs` | 必须继承自它（或它本身） |
-| `where T : IComparable<T>` | 必须实现某接口 |
+| 约束                         | 含义                    |
+| -------------------------- | --------------------- |
+| `where T : class`          | 必须是引用类型               |
+| `where T : struct`         | 必须是值类型                |
+| `where T : new()`          | 必须有无参构造（才能 `new T()`） |
+| `where T : GameEventArgs`  | 必须继承自它（或它本身）          |
+| `where T : IComparable<T>` | 必须实现某接口               |
+
 
 ### 7.2 泛型集合与 `GetComponent<T>`
 
@@ -865,16 +875,16 @@ public class UnitActionController : MonoBehaviour
 }
 ```
 
-| 特性 | 作用 |
-|---|---|
-| `[SerializeField]` | 让 **private** 字段出现在 Inspector 里并被存档 |
-| `[Header("…")]` | Inspector 分组标题 |
-| `[Tooltip("…")]` | 悬停说明 |
-| `[DisallowMultipleComponent]` | 禁止重复挂载 |
-| `[RequireComponent(typeof(X))]` | 挂本组件时自动补 `X` |
-| `[CreateAssetMenu]` | 让类能"右键 → Create"成 `.asset` |
-| `[RuntimeInitializeOnLoadMethod]` | **不用挂场景**，加载时自动执行（`GameBootstrap` 靠它） |
-| `[CustomPropertyDrawer]` | 自定义 Inspector 绘制（`Editor/LocalizedEnumDrawer.cs`） |
+| 特性                                | 作用                                                |
+| --------------------------------- | ------------------------------------------------- |
+| `[SerializeField]`                | 让 **private** 字段出现在 Inspector 里并被存档               |
+| `[Header("…")]`                   | Inspector 分组标题                                    |
+| `[Tooltip("…")]`                  | 悬停说明                                              |
+| `[DisallowMultipleComponent]`     | 禁止重复挂载                                            |
+| `[RequireComponent(typeof(X))]`   | 挂本组件时自动补 `X`                                      |
+| `[CreateAssetMenu]`               | 让类能"右键 → Create"成 `.asset`                        |
+| `[RuntimeInitializeOnLoadMethod]` | **不用挂场景**，加载时自动执行（`GameBootstrap` 靠它）             |
+| `[CustomPropertyDrawer]`          | 自定义 Inspector 绘制（`Editor/LocalizedEnumDrawer.cs`） |
 
 **`[SerializeField] private` 是 Unity 的核心习惯**：对外完全私有，但对 Inspector / 存档开放。
 
@@ -905,6 +915,7 @@ public static string GetDescription(this Enum value)
 ```
 
 知识点：
+
 - **特性本质是元数据**，挂在类型/字段/方法上，运行时通过 `System.Reflection` 读。
 - `[Description]` 来自 `System.ComponentModel`（`using System.ComponentModel;`）。
 - 这套「枚举 + `[Description]` + 扩展方法」的写法，让**下拉框直接显示中文**（`Editor/LocalizedEnumDrawer.cs`）。
@@ -947,6 +958,7 @@ someEnum.GetDescription();
 ```
 
 规则：
+
 1. 必须在 **`static class`** 里；
 2. 必须是 **`static` 方法**；
 3. 第一个参数带 **`this`**，表示"给谁扩展"。
@@ -1010,15 +1022,16 @@ yield return new WaitForSeconds(thinkDelay);
 
 **`yield return` 的几种常用值**：
 
-| 写法 | 含义 |
-|---|---|
-| `yield return null` | 等**下一帧** |
-| `yield return new WaitForSeconds(t)` | 等 `t` 秒（受 `Time.timeScale` 影响） |
-| `yield return new WaitForSecondsRealtime(t)` | 等 `t` 秒（不受缩放影响） |
-| `yield return new WaitUntil(() => cond)` | 等到条件成立 |
-| `yield break;` | **提前结束**整个协程（相当于 `return`） |
+| 写法                                           | 含义                             |
+| -------------------------------------------- | ------------------------------ |
+| `yield return null`                          | 等**下一帧**                       |
+| `yield return new WaitForSeconds(t)`         | 等 `t` 秒（受 `Time.timeScale` 影响） |
+| `yield return new WaitForSecondsRealtime(t)` | 等 `t` 秒（不受缩放影响）                |
+| `yield return new WaitUntil(() => cond)`     | 等到条件成立                         |
+| `yield break;`                               | **提前结束**整个协程（相当于 `return`）     |
 
 **关键点**：
+
 - 协程的返回类型必须是 `IEnumerator`，用 `StartCoroutine` 启动。
 - **`StartCoroutine` 只能由 `MonoBehaviour` 调用**，而且**物体/组件被禁用时会一起停**。
 - 协程**不是线程**，全部跑在主线程，操作 UI 是安全的。
@@ -1115,6 +1128,7 @@ var p = new PlayerState(true);
 ```
 
 项目的分层很清楚：
+
 - `Core/Models`、`Core/Battle/BattleRules.cs`、`Core/Data` → **纯 C# 逻辑**，能脱离 Unity 单测；
 - `UI/`、各种 `*Controller` → `MonoBehaviour`，负责和引擎/UI 打交道。
 
@@ -1127,6 +1141,7 @@ Debug.LogError(...);                                                      // 错
 ```
 
 项目习惯：
+
 - 前缀 `[模块名]`，方便在 Console 里过滤；
 - 第二个参数传 `this`，点日志能**高亮对应物体**；
 - `Debug.Log` 在**发布版里仍然会执行**（字符串拼接照样发生），高频路径上要用开关保护 —— 项目里都是 `if (debugLog)` 包起来（`UI/Battle/UnitActionController.cs:71`）。
@@ -1135,13 +1150,13 @@ Debug.LogError(...);                                                      // 错
 
 以调试键为例，`Battle.unity` 里实际存的值（**不是脚本默认值**）：
 
-| 字段 | 脚本默认 | 场景里存的值 |
-|---|---|---|
-| `debugRaiderToggleKey` | `KeyCode.F9` | `110`（N） |
-| `debugEndTurnKey` | `KeyCode.T`（116） | `116`（T） |
-| `debugRaiseCpMaxKey` | `KeyCode.Equals`（61） | `61`（=） |
-| `debugPlayKey` | `KeyCode.M`（109） | `109`（M） |
-| `debugDrawKey` | `KeyCode.D`（100） | `100`（D） |
+| 字段                     | 脚本默认                 | 场景里存的值   |
+| ---------------------- | -------------------- | -------- |
+| `debugRaiderToggleKey` | `KeyCode.F9`         | `110`（N） |
+| `debugEndTurnKey`      | `KeyCode.T`（116）     | `116`（T） |
+| `debugRaiseCpMaxKey`   | `KeyCode.Equals`（61） | `61`（=）  |
+| `debugPlayKey`         | `KeyCode.M`（109）     | `109`（M） |
+| `debugDrawKey`         | `KeyCode.D`（100）     | `100`（D） |
 
 所以 `BattlefieldManager.cs:1475` 那个 Tooltip 说"默认 F9"是**过时的**（场景早改成 N 了）；而 `BattleSelfTest` 场景里没挂、由 `GameBootstrap` 运行时补，用的才是脚本默认值 `F9` —— **两者不冲突，正是靠场景覆盖做到的**。
 
@@ -1167,6 +1182,7 @@ for (int i = 0; i < units.Count; i++)
 }
 ```
 
+
 **为什么不用**：LINQ 的链式调用**每一步都会分配**（迭代器对象、闭包、临时集合）。战斗逻辑每帧都在跑（`BattleRules` 里的目标筛选、`EnemyAI` 的评分），在 Unity 里这是明确的 GC 压力来源。而且 IL2CPP 下 AOT 泛型实例化会增大包体和编译时间。
 
 **代价**：代码更长、更啰嗦。这是**有意识的取舍**，不是不会写。
@@ -1185,13 +1201,13 @@ C# 9 里这些东西**可用但项目没用**：`(int a, int b)` 元组简写、
 
 ### 11.4 C# 10+ 语法（**编译器不支持**）
 
-| 语法 | 版本 | 本项目 |
-|---|---|---|
+| 语法                       | 版本    | 本项目    |
+| ------------------------ | ----- | ------ |
 | 文件作用域命名空间 `namespace X;` | C# 10 | ❌ 编译不过 |
-| 全局 `using` | C# 10 | ❌ 编译不过 |
-| `required` 成员 | C# 11 | ❌ 编译不过 |
-| `record struct` | C# 10 | ❌ 编译不过 |
-| 插值字符串里的换行 | C# 11 | ❌ 编译不过 |
+| 全局 `using`               | C# 10 | ❌ 编译不过 |
+| `required` 成员            | C# 11 | ❌ 编译不过 |
+| `record struct`          | C# 10 | ❌ 编译不过 |
+| 插值字符串里的换行                | C# 11 | ❌ 编译不过 |
 
 写的时候如果 IDE 提示"语言版本不支持"，原因就是 `LangVersion = 9.0` 这条线。
 
@@ -1199,15 +1215,15 @@ C# 9 里这些东西**可用但项目没用**：`(int a, int b)` 元组简写、
 
 项目所有脚本都写在**全局命名空间**里（`namespace` 关键字一次都没出现）。
 
-好处：Unity 里拖引用、写调试脚本省事，不用 `using`。
+好处：Unity 里拖引用、写调试脚本省事，不用 `using`。  
 代价：**类型名有冲突风险**。所以项目靠命名约定区分：
 
-| 后缀 / 目录 | 类型 |
-|---|---|
+| 后缀 / 目录       | 类型                                                              |
+| ------------- | --------------------------------------------------------------- |
 | `*Controller` | 管一个系统的 MonoBehaviour（`TurnController`、`CommandPointController`） |
-| `*UI` | 纯表现层（`BattleResultUI`、`DeckUI`、`HandUI`） |
-| `*Manager` | 全局单例（`BattlefieldManager`、`EventManager`） |
-| `Battle*` | 战斗域的类型（`BattleRow`、`BattleRules`、`BattleSide`） |
+| `*UI`         | 纯表现层（`BattleResultUI`、`DeckUI`、`HandUI`）                        |
+| `*Manager`    | 全局单例（`BattlefieldManager`、`EventManager`）                       |
+| `Battle*`     | 战斗域的类型（`BattleRow`、`BattleRules`、`BattleSide`）                  |
 
 > 如果将来要抽 DLL 或引入第三方库，**第一步就是补命名空间**，否则很容易撞名。
 
@@ -1217,47 +1233,47 @@ C# 9 里这些东西**可用但项目没用**：`(int a, int b)` 元组简写、
 
 ### 12.1 常用语法糖对照
 
-| 简写 | 等价于 |
-|---|---|
-| `x?.Y` | `x == null ? null : x.Y` |
-| `x ?? y` | `x == null ? y : x` |
-| `x ??= y` | `if (x == null) x = y;` |
-| `a is T t` | `a is T` 且把 `a` 转成 `t` |
-| `M(out var v)` | 声明 `v` 并作为 `out` 参数传入 |
-| `$"{a}/{b}"` | `a.ToString() + "/" + b.ToString()` |
-| `=> expr` | `{ return expr; }` |
-| `new()` | `new 左边那个类型()` |
-| `evt?.Invoke(x)` | `if (evt != null) evt(x);` |
-| `T x = default;` | 值类型给零值、引用类型给 `null` |
+| 简写               | 等价于                                 |
+| ---------------- | ----------------------------------- |
+| `x?.Y`           | `x == null ? null : x.Y`            |
+| `x ?? y`         | `x == null ? y : x`                 |
+| `x ??= y`        | `if (x == null) x = y;`             |
+| `a is T t`       | `a is T` 且把 `a` 转成 `t`              |
+| `M(out var v)`   | 声明 `v` 并作为 `out` 参数传入               |
+| `$"{a}/{b}"`     | `a.ToString() + "/" + b.ToString()` |
+| `=> expr`        | `{ return expr; }`                  |
+| `new()`          | `new 左边那个类型()`                      |
+| `evt?.Invoke(x)` | `if (evt != null) evt(x);`          |
+| `T x = default;` | 值类型给零值、引用类型给 `null`                 |
 
 ### 12.2 项目里最容易写错的地方
 
-| 坑 | 正确做法 |
-|---|---|
-| 事件只订不退 → 内存泄漏 + 重复触发 | `OnEnable` 订阅 / `OnDisable` 退订，加 `hooked` 布尔防重 |
-| `MonoBehaviour` 用 `new` 创建 | `go.AddComponent<T>()` |
-| 静态单例切场景后不清 | `OnDestroy` 里 `if (instance == this) instance = null;` |
-| 循环里用 `+` 拼字符串 | `StringBuilder` |
-| 循环里用 LINQ | `for` + 手动 `Add` |
-| 插值里写三元不加括号 | `{(x ? a : b)}` |
-| 泛型字段指望 Unity 序列化 | 换成具体类型 |
-| 改了 `[SerializeField]` 默认值以为生效 | **场景里存的值会覆盖默认值**，得去 Inspector 改 |
-| `switch` 表达式漏 `_` 分支 | 补 `_ => ...`，否则加枚举成员时编译报错 |
-| 反射找私有字段没给 `BindingFlags.NonPublic` | 两个 flag 都要给，并判 `null` |
+| 坑                                  | 正确做法                                                   |
+| ---------------------------------- | ------------------------------------------------------ |
+| 事件只订不退 → 内存泄漏 + 重复触发               | `OnEnable` 订阅 / `OnDisable` 退订，加 `hooked` 布尔防重         |
+| `MonoBehaviour` 用 `new` 创建         | `go.AddComponent<T>()`                                 |
+| 静态单例切场景后不清                         | `OnDestroy` 里 `if (instance == this) instance = null;` |
+| 循环里用 `+` 拼字符串                      | `StringBuilder`                                        |
+| 循环里用 LINQ                          | `for` + 手动 `Add`                                       |
+| 插值里写三元不加括号                         | `{(x ? a : b)}`                                        |
+| 泛型字段指望 Unity 序列化                   | 换成具体类型                                                 |
+| 改了 `[SerializeField]` 默认值以为生效      | **场景里存的值会覆盖默认值**，得去 Inspector 改                        |
+| `switch` 表达式漏 `_` 分支               | 补 `_ => ...`，否则加枚举成员时编译报错                              |
+| 反射找私有字段没给 `BindingFlags.NonPublic` | 两个 flag 都要给，并判 `null`                                  |
 
 ### 12.3 各知识点的代表文件
 
-| 想复习 | 去看 |
-|---|---|
-| `switch` 表达式 / 表达式体 / 工厂方法 | `Core/Data/CardEffect.cs` |
-| 委托 · 泛型 · `Delegate.Combine` | `Core/Events/EventManger.cs` |
-| 特性 · 反射 · 扩展方法 | `Common/EnumExtensions.cs`、`Editor/LocalizedEnumDrawer.cs` |
-| 协程 · 单例 · 事件订阅配对 | `Core/Battle/TurnController.cs`、`Core/AI/EnemyAI.cs` |
-| 属性 · 封装 · CP 两层模型 | `Core/Models/PlayerState.cs` |
-| 集合封装 · `IReadOnlyList` · `struct` | `UI/Cards/FanLayout.cs` |
-| 纯 C# 逻辑层（可脱离 Unity 单测） | `Core/Battle/BattleRules.cs` |
-| 反射访问私有字段 | `Core/Battle/BattleSelfTest.cs:856` |
-| 不用命名空间的大项目怎么组织 | 全项目 `Assets/_Project/Scripts/` |
+| 想复习                               | 去看                                                         |
+| --------------------------------- | ---------------------------------------------------------- |
+| `switch` 表达式 / 表达式体 / 工厂方法        | `Core/Data/CardEffect.cs`                                  |
+| 委托 · 泛型 · `Delegate.Combine`      | `Core/Events/EventManger.cs`                               |
+| 特性 · 反射 · 扩展方法                    | `Common/EnumExtensions.cs`、`Editor/LocalizedEnumDrawer.cs` |
+| 协程 · 单例 · 事件订阅配对                  | `Core/Battle/TurnController.cs`、`Core/AI/EnemyAI.cs`       |
+| 属性 · 封装 · CP 两层模型                 | `Core/Models/PlayerState.cs`                               |
+| 集合封装 · `IReadOnlyList` · `struct` | `UI/Cards/FanLayout.cs`                                    |
+| 纯 C# 逻辑层（可脱离 Unity 单测）            | `Core/Battle/BattleRules.cs`                               |
+| 反射访问私有字段                          | `Core/Battle/BattleSelfTest.cs:856`                        |
+| 不用命名空间的大项目怎么组织                    | 全项目 `Assets/_Project/Scripts/`                             |
 
 ---
 

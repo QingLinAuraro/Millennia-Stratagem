@@ -202,6 +202,12 @@ public class BattlefieldManager : MonoBehaviour
     {
         instance = this;
 
+        // 进一次战斗场景 = 开一局新的,所以先把跨局的结算状态清零。
+        // ⚠ 这一步不能省:BattleSettlement 是**静态类**,MatchOver / Winner / CurrentRound / 统计
+        //   都存在静态字段里,切场景不会掉。上一局打完 MatchOver 留在 true,下一局一进来
+        //   "点什么都说对局已经结束"—— 这个坑就是这么来的(ResetMatch 早就写了,只是没人调)。
+        BattleSettlement.ResetMatch();
+
         prefabs = new PrefabResolver(this);
         layouts = new BattlefieldLayouts(this);
         buildingManager = new BuildingManager(this, prefabs);
@@ -213,13 +219,48 @@ public class BattlefieldManager : MonoBehaviour
         BattleSettlement.SetBoard(this);
         ResolveRefs();
 
+        // 开局第一件事:把「效果登记表」和「当前卡池」对一遍账。
+        // 放在这里是因为它必须**早于任何一张牌被打出** —— 一旦某张策略卡先走了文案兜底,
+        // 它的空结果会被缓存进表里,后面的对账就查不出"这张没登记"了。
+        CardEffectDatabase.Validate();
+        AuditCardStats();
+
         if (lockRowLayout) layouts.ApplyRowLayout();
         if (loadBuildingsAtStart) buildingManager.LoadBuildings();
+
+        // 把"这一局是干净开局"写在日志里:下一局如果又出现"对局已经结束",
+        // 第一眼就能看出是重置没生效,还是别处又把 MatchOver 置上了。
+        var camp = buildingManager.FindBuilding(BattleSide.Player, BattleRules.CampName);
+        Debug.Log($"[开局] 新对局：MatchOver={BattleSettlement.MatchOver}、第 {BattleSettlement.CurrentRound} 轮、" +
+                  $"我方大营 HP={(camp != null ? camp.Hp : -1)}");
     }
 
     private void OnDestroy() => highlight?.ClearHighlights();
 
     private void OnDisable() => highlight?.ClearHighlights();
+
+    /// <summary>
+    /// 卡面数据巡检:兵牌的 ATK / HP 正常都是个位数(最强 6/6)。
+    /// 一旦整片卡变成 99 这种量级,多半是 .asset 被批量写坏(或者有人拿 99 当占位),
+    /// 光看战场只会以为是"显示错了",所以在开局就把越界的 cardId 全列出来。
+    /// </summary>
+    private static void AuditCardStats()
+    {
+        var library = CardLibrary.Current;
+        if (library == null || library.Count == 0) return;
+
+        var bad = new List<string>();
+        for (int i = 0; i < library.Count; i++)
+        {
+            var c = library.cards[i];
+            if (c == null || c.cardType != CardType.Unit) continue;   // 策略/建筑不参与数值
+            if (c.atk > 20 || c.hp > 20) bad.Add($"{c.cardId}「{c.cardName}」 {c.atk}/{c.hp}");
+        }
+
+        if (bad.Count > 0)
+            Debug.LogError($"[卡面数据] 有 {bad.Count} 张兵牌的 ATK/HP 明显越界(正常最大 6),卡面数据可能被写坏了:\n  · " +
+                           string.Join("\n  · ", bad));
+    }
 
     // ================================================================ 拖动期间的高亮闸门
     //

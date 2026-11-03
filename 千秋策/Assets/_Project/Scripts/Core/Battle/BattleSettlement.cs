@@ -168,7 +168,7 @@ public static class BattleSettlement
         }
 
         // §4.3 血战:攻击后回复 2 HP(攻击者还活着才算)
-        if (attacker.IsAlive && BattleRules.HasKeyword(attacker.Data, Keyword.BloodBattle))
+        if (attacker.IsAlive && BattleRules.HasKeyword(attacker, Keyword.BloodBattle))
         {
             int hpBefore = attacker.Hp;
             int healed = attacker.ApplyHpDelta(2);

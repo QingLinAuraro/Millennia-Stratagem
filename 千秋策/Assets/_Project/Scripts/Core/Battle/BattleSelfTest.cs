@@ -96,7 +96,7 @@ public class BattleSelfTest : MonoBehaviour
         var enemyCamp = board.FindBuilding(BattleSide.Enemy, "大营");
         Check(playerCamp != null, "我方大营已就位", "我方大营没摆上(检查 buildPrefab)");
         Check(enemyCamp != null, "敌方大营已就位", "敌方大营没摆上");
-        Check(playerCamp != null && playerCamp.MaxHp == 20, "大营 20 HP", $"实际 {playerCamp?.MaxHp}");
+        Check(playerCamp != null && playerCamp.MaxHp == 25, "大营 25 HP", $"实际 {playerCamp?.MaxHp}");
         Check(board.FindBuilding(BattleSide.Player, "军械库") != null, "我方军械库已就位", "军械库没摆上");
         Check(board.FindBuilding(BattleSide.Player, "粮草") != null, "我方粮草已就位", "粮草没摆上");
         Check(board.PlayerMid.UnitCapacity == 5, "中军容量 5", $"实际 {board.PlayerMid.UnitCapacity}");
@@ -151,6 +151,20 @@ public class BattleSelfTest : MonoBehaviour
                 if (deployed != null && !BattleRules.HasKeyword(card, Keyword.Blitz))
                     Check(!deployed.CanActNow, "刚部署的非闪击单位本回合不能行动", "刚部署就能动了(§2.5 反了)");
             }
+
+            // ---------- 4b. 闪击:部署当回合必须**真的有行动力** ----------
+            // 只判 BattleRules 不够:规则层只有"允不允许",真正的门槛是 Ap > 0。
+            // 以前这里只放行规则、Init 却把 AP 写死 0,表现就是"闪击单位站着不动"。
+            var blitzCard = FindBlitzUnitCard();
+            if (blitzCard != null && board.PlayerMid.UnitCount < board.PlayerMid.UnitCapacity)
+            {
+                if (board.DeployUnit(blitzCard, board.PlayerMid, 1, out var blitzUnit, out string blitzReason))
+                    Check(blitzUnit != null && blitzUnit.Ap > 0 && blitzUnit.CanActNow,
+                          $"闪击「{blitzCard.cardName}」部署当回合能行动",
+                          $"AP={blitzUnit?.Ap} —— 闪击只放行了规则,没给行动力");
+                else
+                    Check(false, "闪击单位能部署", blitzReason ?? "部署被拒");
+            }
         }
 
         // ---------- 5. 移动 + 攻击 + 反击(§2.6 / §7.1) ----------
@@ -174,6 +188,8 @@ public class BattleSelfTest : MonoBehaviour
                 Check(mine.Ap == apBlocked, "被拒的进前军没有扣行动力", $"AP {apBlocked} → {mine.Ap}");
 
                 // 把敌方那只挪走,前军一空出来我方就应该能进
+                // (这是**测试摆位**,不是合法行动:它刚移动过,正常规则下本回合不能再移动)
+                his.GrantFullAp();
                 board.MoveUnit(his, BattleRowType.Mid, out _);
                 Check(his.Row == null || his.Row.RowType == BattleRowType.Mid,
                       "敌方单位撤出前军（准备让位）", $"现在在 {his.Row?.DisplayName}");
@@ -1227,6 +1243,18 @@ public class BattleSelfTest : MonoBehaviour
         }
 
         return fallback;
+    }
+
+    /// <summary>从卡池里挑一张带「闪击」的兵牌(§2.5 部署当回合就能行动)</summary>
+    private static CardData FindBlitzUnitCard()
+    {
+        var all = Resources.FindObjectsOfTypeAll<CardData>();
+        for (int i = 0; i < all.Length; i++)
+        {
+            var card = all[i];
+            if (card != null && card.IsUnitCard && BattleRules.HasKeyword(card, Keyword.Blitz)) return card;
+        }
+        return null;
     }
 
     /// <summary>从卡池里挑一张骑兵牌(§7.4 袭扰只有骑兵能做)</summary>

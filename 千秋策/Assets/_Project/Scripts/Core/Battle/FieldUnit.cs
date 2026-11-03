@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using DG.Tweening;
 using TMPro;
 using UnityEngine;
@@ -58,6 +59,7 @@ public class FieldUnit : MonoBehaviour
     private TMP_Text hpText;
     private bool hpTextLookupDone;
     private bool hpTextWarned;
+    private bool statWarned;
     private CardDisplay display;
 
     /// <summary>受击抖动(同时只允许一个,连击时不叠着抖)</summary>
@@ -86,6 +88,18 @@ public class FieldUnit : MonoBehaviour
 
     /// <summary>本回合的 AP 上限 = 行动次数(骑兵 2、连战 2、其余 1)</summary>
     public int ApMax { get; private set; }
+
+    /// <summary>
+    /// 本回合是否已经移动过。骑兵每回合只能移动一次（2 AP 是「移动 + 攻击」，不是两次移动）。
+    /// 非骑兵移动后不能再攻击（1 AP 只能二选一）。
+    /// </summary>
+    public bool MovedThisTurn { get; private set; }
+
+    /// <summary>本回合已经攻击了几次。连战最多 2 次，其余 1 次；骑兵移动后最多再攻击 1 次。</summary>
+    public int AttacksThisTurn { get; private set; }
+
+    /// <summary>后置授予的词条(§4.3 授予词条):只在本局运行时生效,不写回卡面资产</summary>
+    private readonly List<Keyword> grantedKeywords = new();
 
     /// <summary>压制剩余回合数(§4.3 压制):> 0 时不能行动</summary>
     public int SuppressTurns { get; private set; }
@@ -133,8 +147,71 @@ public class FieldUnit : MonoBehaviour
 
     public bool IsAliveAndWell => IsAlive && !IsBuilding;
 
-    /// <summary>还能行动吗(有 AP、没被压制、不是刚部署、不是无敌中的建筑之类)</summary>
-    public bool CanActNow => IsUnit && IsAlive && Ap > 0 && SuppressTurns <= 0;
+    /// <summary>骑兵(决定「移动 + 攻击」的行动模式)</summary>
+    public bool IsCavalry => IsUnit && Data != null && Data.unitType == UnitType.Cavalry;
+
+    /// <summary>本回合最多攻击几次：连战 2 次，其余 1 次</summary>
+    public int MaxAttacksThisTurn => HasKeyword(Keyword.DoubleStrike) ? 2 : 1;
+
+    /// <summary>这个单位现在带不带某个词条(卡面自带的 + 本局后置授予的)</summary>
+    public bool HasKeyword(Keyword keyword)
+        => (Data != null && Data.keywords != null && Data.keywords.Contains(keyword))
+           || grantedKeywords.Contains(keyword);
+
+    /// <summary>后置授予一个词条(重甲走 SetHeavyArmor,不走这里)</summary>
+    public void GrantKeyword(Keyword keyword)
+    {
+        if (grantedKeywords.Contains(keyword)) return;
+        grantedKeywords.Add(keyword);
+        KeywordsChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 词条集合变了(卡面自带的不变;后置授予、加一层重甲会触发)。
+    /// 战场卡右上角那个词条栏靠它刷新 —— 有事件就不用每帧轮询。
+    /// </summary>
+    public event System.Action KeywordsChanged;
+
+    /// <summary>本局后置授予的词条(只读)。卡面自带的请读 Data.keywords</summary>
+    public IReadOnlyList<Keyword> GrantedKeywords => grantedKeywords;
+
+    /// <summary>把 ATK 直接设成某个值(等价类效果用)。同样受 99 硬顶约束</summary>
+    public void SetAtk(int value)
+    {
+        Atk = Mathf.Clamp(value, 0, BattleRules.MaxUnitStat);
+        Flush();
+    }
+
+    /// <summary>
+    /// 本回合还能不能移动。
+    /// · 骑兵：只能移动 1 次；攻击过 1 次仍可移动（攻击后移动），攻击 2 次后不行。
+    /// · 非骑兵：移动过就不能再移动；攻击过就不能再移动（1 AP 只能二选一）。
+    /// </summary>
+    public bool CanMoveNow
+        => IsUnit && IsAlive && Ap > 0 && SuppressTurns <= 0
+           && !MovedThisTurn
+           && (IsCavalry ? AttacksThisTurn < 2 : AttacksThisTurn == 0);
+
+    /// <summary>
+    /// 本回合还能不能攻击。
+    /// · 骑兵：移动后最多再攻击 1 次（连战也不叠加成「移动 + 双击」）。
+    /// · 非骑兵：移动过就不能攻击；连战可攻击 2 次，其余 1 次。
+    /// </summary>
+    public bool CanAttackNow
+    {
+        get
+        {
+            if (!IsUnit || !IsAlive || Ap <= 0 || SuppressTurns > 0) return false;
+            if (!IsCavalry && MovedThisTurn) return false;
+
+            int max = MaxAttacksThisTurn;
+            if (IsCavalry && MovedThisTurn && max > 1) max = 1;
+            return AttacksThisTurn < max;
+        }
+    }
+
+    /// <summary>还能行动吗（移动或攻击至少一种模式还有余量、有 AP、没被压制、不是刚部署）</summary>
+    public bool CanActNow => CanMoveNow || CanAttackNow;
 
     /// <summary>当前有没有本回合的临时增益(表现层可以据此画 buff 图标)</summary>
     public bool HasTempBuff => tempAtk != 0 || tempHp != 0;
@@ -158,14 +235,28 @@ public class FieldUnit : MonoBehaviour
         display = cardView;
         Row = row;
         Side = side;
-        Atk = data != null ? data.atk : 0;
-        Hp = data != null ? data.hp : 0;
+        // 卡面数据正常都在个位数,这里夹一道只是为了"坏数据别把战场带歪"
+        Atk = data != null ? Mathf.Clamp(data.atk, 0, BattleRules.MaxUnitStat) : 0;
+        Hp = data != null ? Mathf.Clamp(data.hp, 1, BattleRules.MaxUnitStat) : 0;
         MaxHp = Hp;
         baseScale = transform.localScale;
 
         Ap = 0;
         ApMax = data != null ? BattleRules.ActionPointsOf(data) : 1;
         DeployedThisTurn = true;
+        MovedThisTurn = false;
+        AttacksThisTurn = 0;
+        grantedKeywords.Clear();
+
+        // 「闪击」:部署当回合就能行动 —— 落位时直接把 AP 给满。
+        // 【为什么必须在这里给】
+        //   规则层(BattleRules.CanMoveNow / CanAttackNow)只回答"允不允许",
+        //   真正决定"能不能动"的门槛是 Ap > 0。只放行规则、不给 AP,表现就是"闪击单位站着不动"。
+        //   这个坑以前被另一件事盖住了:所有卡的关键词都被错读成 Blitz,规则层对全员放行,
+        //   而 AP 一直是 0 —— 其实是**谁都动不了**;词条修好后非闪击正确地不能动、闪击也还是不能动,才露出来。
+        //   ⚠ 不要用 GrantFullAp():那个方法会顺手把 DeployedThisTurn 清掉,
+        //     而"本回合刚部署"这个标记还要给袭扰/撤回之类的规则用。
+        if (HasKeyword(Keyword.Blitz)) Ap = ApMax;
 
         // 悬停预览要知道"这张牌现在在场上是谁":预览显示的是当前攻/血,不是卡面数值
         // (战场卡的悬停组件就挂在卡面根上,由 BattlefieldManager 决定开不开)
@@ -218,8 +309,9 @@ public class FieldUnit : MonoBehaviour
     /// <summary>改血量(建筑挨打、修缮都走这里),顺手刷角标/卡面上的数字</summary>
     public void SetHp(int value)
     {
-        Hp = Mathf.Max(0, value);
-        if (Hp > MaxHp) MaxHp = Hp;
+        // 兵牌夹 0~99(和 ATK / 上限同一套硬顶);建筑不设上限
+        Hp = IsBuilding ? Mathf.Max(0, value) : Mathf.Clamp(value, 0, BattleRules.MaxUnitStat);
+        if (Hp > MaxHp) MaxHp = IsBuilding ? Hp : Mathf.Min(Hp, BattleRules.MaxUnitStat);
         Flush();
     }
 
@@ -232,7 +324,17 @@ public class FieldUnit : MonoBehaviour
         if (delta == 0) return 0;
 
         int before = Hp;
-        Hp = Mathf.Min(MaxHp, Hp + delta);
+        // 建筑不设血量上限:回多少涨多少,上限跟着一起抬(否则血条/数字会卡在旧上限)
+        if (IsBuilding && delta > 0)
+        {
+            Hp += delta;
+            if (Hp > MaxHp) MaxHp = Hp;
+        }
+        else
+        {
+            // 兵牌:回血 / 加血都封在 MaxHp 上,而 MaxHp 自己也被 MaxUnitStat 封着
+            Hp = Mathf.Min(MaxHp, Hp + delta);
+        }
         if (Hp < 0) Hp = 0;
         Flush();
         return Hp - before;
@@ -242,14 +344,19 @@ public class FieldUnit : MonoBehaviour
     public void ApplyAtkDelta(int delta)
     {
         if (delta == 0) return;
-        Atk = Mathf.Max(0, Atk + delta);
+        // 加攻可以一直叠到 99;减攻不低于 0
+        Atk = Mathf.Clamp(Atk + delta, 0, BattleRules.MaxUnitStat);
         Flush();
     }
 
-    /// <summary>HP 上限的增减(临时 buff 加 HP 时上限也跟着涨,失效时一起收回去)</summary>
+    /// <summary>
+    /// HP 上限的增减(临时 buff 加 HP 时上限也跟着涨,失效时一起收回去)。
+    /// 兵牌封顶 99;建筑不设上限(大营可以靠修缮一直往上加)。
+    /// </summary>
     public void ApplyMaxHpDelta(int delta)
     {
-        MaxHp = Mathf.Max(1, MaxHp + delta);
+        int cap = IsBuilding ? int.MaxValue : BattleRules.MaxUnitStat;
+        MaxHp = Mathf.Clamp(MaxHp + delta, 1, cap);
         if (Hp > MaxHp) Hp = MaxHp;
         Flush();
     }
@@ -308,8 +415,14 @@ public class FieldUnit : MonoBehaviour
         return true;
     }
 
-    /// <summary>重甲层数(落位时由 BattlefieldManager 按卡面关键词标出来)</summary>
-    public void SetHeavyArmor(int layers) => HeavyArmor = Mathf.Max(0, layers);
+    /// <summary>重甲层数(落位时由 BattlefieldManager 按卡面关键词标出来;策略卡「犒赏」会再加一层)</summary>
+    public void SetHeavyArmor(int layers)
+    {
+        int value = Mathf.Max(0, layers);
+        if (value == HeavyArmor) return;
+        HeavyArmor = value;
+        KeywordsChanged?.Invoke();      // 层数变了 = 词条栏要重画(重甲 ×N)
+    }
 
     /// <summary>压制:接下来 N 个自己的回合不能行动(§4.3 压制)。同时把当前 AP 清空</summary>
     public void ApplySuppress(int turns)
@@ -336,7 +449,9 @@ public class FieldUnit : MonoBehaviour
         if (!IsUnit) { Ap = 0; ApMax = 0; return; }
 
         ApMax = Data != null ? BattleRules.ActionPointsOf(Data) : 1;
-        Ap = (DeployedThisTurn && !BattleRules.HasKeyword(Data, Keyword.Blitz)) ? 0 : ApMax;
+        Ap = (DeployedThisTurn && !HasKeyword(Keyword.Blitz)) ? 0 : ApMax;
+        MovedThisTurn = false;
+        AttacksThisTurn = 0;
 
         if (SuppressTurns > 0) Ap = 0;      // 被压制:这个回合直接没有 AP
     }
@@ -374,7 +489,23 @@ public class FieldUnit : MonoBehaviour
     public void GrantFullAp()
     {
         Ap = ApMax;
+        MovedThisTurn = false;
+        AttacksThisTurn = 0;
         DeployedThisTurn = false;
+        Flush();
+    }
+
+    /// <summary>标记本回合已移动(由 BattleActionExecutor 在移动成功后调用)</summary>
+    public void MarkMoved()
+    {
+        MovedThisTurn = true;
+        Flush();
+    }
+
+    /// <summary>标记本回合已攻击一次(由 BattleActionExecutor 在攻击结算成功后调用)</summary>
+    public void MarkAttacked()
+    {
+        AttacksThisTurn++;
         Flush();
     }
 
@@ -456,7 +587,23 @@ public class FieldUnit : MonoBehaviour
             RefreshHpText();
             WarnIfHpTextMissing();
         }
+
+        // 表现层引用兜一道:正常路径由 Init 传进来,但只要有哪条生成路径漏传(或以后新增了一条),
+        // 数值就会"数据变了、卡面不动"。这里按子物体找一次,找到就记下来,省得每帧找。
+        if (display == null) display = GetComponentInChildren<CardDisplay>(true);
+
         if (display != null) display.RefreshStats(Atk, Hp, MaxHp);
+
+        // 数值哨兵:兵牌的 ATK / 上限有 99 的硬顶,超过就说明有人绕过了夹取(新加的入口忘了封顶)。
+        // 建筑排除在外:建筑血量本来就是"不设上限、可以一直加"的设计。
+        if (!isBuilding && !statWarned
+            && (Atk > BattleRules.MaxUnitStat || MaxHp > BattleRules.MaxUnitStat))
+        {
+            statWarned = true;
+            Debug.LogWarning($"[数值异常] 「{DisplayName}」({(Data != null ? Data.cardId : "?")}) " +
+                             $"ATK={Atk}、HP={Hp}/{MaxHp},超过了 {BattleRules.MaxUnitStat} 的硬顶 —— " +
+                             "说明有改数值的入口没走 FieldUnit 的夹取。", this);
+        }
     }
 
     /// <summary>

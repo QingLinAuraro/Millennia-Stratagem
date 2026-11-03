@@ -213,21 +213,27 @@ public static class CardEffectResolver
         for (int i = 0; i < set.effects.Count; i++)
         {
             var effect = set.effects[i];
+            if (!ConditionMet(effect, caster)) continue;   // 条件不满足:整条效果跳过
             bool isPrimaryEffect = effect.targetSlot == CardEffectTargetSlot.Primary;
 
             switch (effect.kind)
             {
                 case CardEffectKind.Damage:
-                    if (effect.scope == CardEffectScope.Random || effect.scope == CardEffectScope.AllEnemy)
+                    if (effect.scope == CardEffectScope.Random || effect.scope == CardEffectScope.AllEnemy
+                        || effect.scope == CardEffectScope.StrongestEnemy)
                     {
                         if (HasEnemyUnit(caster)) anyViable = true;
                     }
-                    else if (effect.scope == CardEffectScope.Row)
+                    else if (effect.scope == CardEffectScope.Row || effect.scope == CardEffectScope.TwoRows)
                     {
                         if (effect.targetSlot == CardEffectTargetSlot.Primary)
                         {
                             needsPrimary = true;
-                            if (primaryRow != null) primaryOk = true;
+                            // 不能只判"排不为空":排里可能一个敌人都没有(空排/只有自己人)。
+                            // 那样牌照样打出去、排也照样吃伤害,结果一个人都没打到 —— 白扣费用。
+                            if (RowHasTarget(primaryRow, caster)) primaryOk = true;
+                            else if (primaryRow != null && reason == null)
+                                reason = "这一排没有可打的敌方单位";
                         }
                         else if (HasEnemyUnit(caster)) anyViable = true;
                     }
@@ -255,11 +261,28 @@ public static class CardEffectResolver
                     break;
 
                 case CardEffectKind.Heal:
-                    // 回血只有一种 kind,目标是谁由玩家指定 / scope 决定,所以这里只判「场上有没有能回的东西」。
-                    // 具体回建筑还是回兵牌在 ApplyHeal 里按目标类型分流。
-                    if (HasRepairableBuilding(caster) || HasHealableUnit(caster)
-                        || BattleSettlement.FindCamp(caster.side) != null)
+                    // 回血只有一种 kind,目标是谁由玩家指定 / scope 决定,所以这里只判「场上有没有**需要回**的东西」。
+                    // ⚠ 别拿大营当兜底判据:大营永远在场上,那样任何一张治疗牌都会被判"打得出去",
+                    //    打出来却因为目标满血而什么都没做(「犒军」就是这么连着白放两次的)。
+                    //
+                    // 玩家已经把牌拖到一个**掉血的友方**身上了 —— 这是最直接的判据,优先采信。
+                    // 光靠下面的扫描不够稳:扫描是"全场有没有缺血的",一旦枚举漏了(建筑没进排、
+                    // 大营不算单位),明明选中的目标就在眼前,牌还是会被判成"没地方用"。
+                    if (primaryUnit != null && primaryUnit.Side == caster.side
+                        && (primaryUnit.Hp < primaryUnit.MaxHp
+                            || (primaryUnit.IsBuilding && !primaryUnit.IsCamp)))
+                    {
+                        needsPrimary = true;
+                        primaryOk = true;
+                    }
+                    else if (HasRepairableBuilding(caster) || HasHealableUnit(caster) || IsCampHurt(caster))
+                    {
                         anyViable = true;
+                    }
+                    else if (reason == null)
+                    {
+                        reason = "没有需要治疗的友方单位（都已满血）";
+                    }
                     break;
 
                 case CardEffectKind.DiscardHand:
@@ -269,6 +292,35 @@ public static class CardEffectResolver
 
                 case CardEffectKind.Restrict:
                     if (HasEnemyUnit(caster)) anyViable = true;
+                    break;
+
+                case CardEffectKind.SetAtk:
+                    if (HasEnemyUnit(caster)) anyViable = true;
+                    break;
+
+                case CardEffectKind.TradeBlows:
+                    if (EnemyUnitCount(caster) >= 2) anyViable = true;
+                    break;
+
+                case CardEffectKind.Destroy:
+                    if (effect.scope == CardEffectScope.Random)
+                    {
+                        if (HasEnemyUnit(caster)) anyViable = true;
+                    }
+                    else
+                    {
+                        needsPrimary = true;
+                        if (primaryUnit != null && primaryUnit.Side != caster.side && primaryUnit.IsUnit) primaryOk = true;
+                    }
+                    break;
+
+                case CardEffectKind.GrantKeyword:
+                    if (primaryUnit != null && primaryUnit.Side == caster.side && primaryUnit.IsUnit)
+                    {
+                        needsPrimary = true;
+                        primaryOk = true;
+                    }
+                    else if (HasAllyUnit(caster)) anyViable = true;
                     break;
 
                 case CardEffectKind.Summon:
@@ -292,8 +344,13 @@ public static class CardEffectResolver
 
         if (anyViable) return true;
 
-        if (needsPrimary && !primaryOk)
+        if (needsPrimary)
         {
+            // 目标本身合法(玩家真的把牌拖到了一个符合 targetType 的对象上),这张牌就该打出去。
+            // 以前这里少这一句:primaryOk 成立时既没 return true、也没被下面的 if 拦住,
+            // 直接落到最后那句「现在没有能落地的效果」—— 单体伤害 / 授予词条 / 指定增益全部被误杀。
+            if (primaryOk) return true;
+
             reason = card.RequiresTarget
                 ? $"没有可以指定的目标：{BattleRules.TargetTypeName(card.targetType)}"
                 : "没有合适的目标";
@@ -321,9 +378,21 @@ public static class CardEffectResolver
         var set = CardEffectDatabase.Get(card);
         var parts = new List<string>();
 
+        // 策略卡一条可执行效果都没有 = 这张牌必然白打。与其说一句「已结算」让人以为生效了,
+        // 不如**拦住不让打**:牌留在手里、费不扣,日志里指名字段说清楚该去补哪张登记。
+        if (set.IsEmpty && !string.IsNullOrEmpty(card.effectText))
+        {
+            message = $"「{card.cardName}」的效果没能识别（{card.effectText}），这张牌不能打";
+            Debug.LogError($"[效果] 「{card.cardName}」({card.cardId})登记后一条可执行效果都没有," +
+                           $"卡面写的是「{card.effectText}」。把它补进 CardEffectDatabase.Build()," +
+                           "否则这张牌打出去只会白扣费用。");
+            return false;
+        }
+
         for (int i = 0; i < set.effects.Count; i++)
         {
             var effect = set.effects[i];
+            if (!ConditionMet(effect, caster)) continue;
             string part = ApplyEffect(effect, caster, primaryUnit, primaryRow);
             if (!string.IsNullOrEmpty(part)) parts.Add(part);
         }
@@ -416,6 +485,10 @@ public static class CardEffectResolver
             case CardEffectKind.DiscardHand:  return ApplyDiscard(effect, caster);
             case CardEffectKind.Restrict:     return ApplySuppress(effect, caster, primaryUnit);
             case CardEffectKind.Summon:       return ApplySummon(effect, caster);
+            case CardEffectKind.SetAtk:       return ApplySetAtk(effect, caster, primaryUnit);
+            case CardEffectKind.TradeBlows:   return ApplyTradeBlows(effect, caster, primaryUnit);
+            case CardEffectKind.Destroy:      return ApplyDestroy(effect, caster, primaryUnit);
+            case CardEffectKind.GrantKeyword: return ApplyGrantKeyword(effect, caster, primaryUnit);
 
             // 费用类效果刻意不在这里结算(此刻卡费还没扣)。真在 Resolve 里被结算了就是流程错了。
             case CardEffectKind.RaiseCpMax:
@@ -461,6 +534,46 @@ public static class CardEffectResolver
                 return $"对 {names.Count} 个敌方单位共造成 {total} 点伤害";
             }
 
+            case CardEffectScope.StrongestEnemy:
+            {
+                var target = PickStrongestEnemyUnit(caster);
+                if (target == null) return null;
+                int dealt = BattleSettlement.DealSpellDamage(target, effect.amount);
+                CheckDeath(target);
+                if (caster.side == BattleSide.Player) BattleSettlement.AddPlayerDamage(dealt);
+                return $"对攻击力最高的「{target.DisplayName}」造成 {dealt} 点伤害";
+            }
+
+            case CardEffectScope.TwoRows:
+            {
+                var row1 = effect.targetSlot == CardEffectTargetSlot.Primary ? primaryRow : PickBestEnemyRow(caster);
+                var row2 = PickSecondEnemyRow(caster, row1);
+                if (row1 == null && row2 == null) return null;
+
+                int total = 0, hits = 0;
+                var hitNames = new List<string>();
+                for (int r = 0; r < 2; r++)
+                {
+                    var row = r == 0 ? row1 : row2;
+                    if (row == null) continue;
+                    var members = BattleRules.Snapshot(row);
+                    for (int i = 0; i < members.Count; i++)
+                    {
+                        var m = members[i];
+                        if (m == null || !m.IsAlive) continue;
+                        // 前军是双方共享的一条排:按"敌方排"打过去时不能连自己人一起打
+                        if (m.Side == caster.side) continue;
+                        total += BattleSettlement.DealSpellDamage(m, effect.amount);
+                        hits++;
+                        CheckDeath(m);
+                    }
+                    hitNames.Add(row.DisplayName);
+                }
+                if (hits == 0) return null;
+                if (caster.side == BattleSide.Player) BattleSettlement.AddPlayerDamage(total);
+                return $"对{string.Join("、", hitNames)}共造成 {total} 点伤害（{hits} 个目标）";
+            }
+
             case CardEffectScope.Row:
             {
                 var row = effect.targetSlot == CardEffectTargetSlot.Primary ? primaryRow : PickBestEnemyRow(caster);
@@ -473,7 +586,10 @@ public static class CardEffectResolver
                     var m = members[i];
                     if (m == null || !m.IsAlive) continue;
 
-                    // 以排为目标的范围效果不选中具体单位,无视守护(§4.3),建筑同样吃伤害
+                    // 以排为目标的范围效果不选中具体单位、无视守护(§4.3),建筑同样吃伤害;
+                    // 但**要按阵营过滤**:前军是双方共享的一条排,不筛的话会把己方单位一起打掉。
+                    if (m.Side == caster.side) continue;
+
                     total += BattleSettlement.DealSpellDamage(m, effect.amount);
                     hits++;
                     CheckDeath(m);
@@ -573,6 +689,113 @@ public static class CardEffectResolver
             : $"我方「{target.DisplayName}」被压制 {effect.amount} 回合";
     }
 
+    // ---------------------------------------------------------------- 扩展策略效果(2026-10-31)
+
+    /// <summary>等价类:把敌方目标 ATK 调到 amount</summary>
+    private static string ApplySetAtk(CardEffect effect, Caster caster, FieldUnit primaryUnit)
+    {
+        var target = primaryUnit;
+        if (target == null || target.Side == caster.side || !target.IsUnit) target = PickStrongestEnemyUnit(caster);
+        if (target == null) return null;
+
+        int before = target.Atk;
+        target.SetAtk(effect.amount);
+        return caster.side == BattleSide.Player
+            ? $"「{target.DisplayName}」ATK {before} → {target.Atk}"
+            : $"我方「{target.DisplayName}」ATK {before} → {target.Atk}";
+    }
+
+    /// <summary>两敌互击:指定的那个 + 自动挑的另一个,各按自身 ATK 互打一次(不触发反击)</summary>
+    private static string ApplyTradeBlows(CardEffect effect, Caster caster, FieldUnit primaryUnit)
+    {
+        var first = primaryUnit;
+        if (first == null || first.Side == caster.side || !first.IsUnit || !first.IsAlive)
+            first = PickStrongestEnemyUnit(caster);
+        if (first == null) return null;
+
+        var second = PickSecondEnemyUnit(caster, first);
+        if (second == null) return null;
+
+        int firstAtk = first.Atk, secondAtk = second.Atk;
+        string firstName = first.DisplayName, secondName = second.DisplayName;
+
+        int toSecond = BattleSettlement.DealSpellDamage(second, firstAtk);
+        CheckDeath(second);
+        int toFirst = BattleSettlement.DealSpellDamage(first, secondAtk);
+        CheckDeath(first);
+
+        if (caster.side == BattleSide.Player) BattleSettlement.AddPlayerDamage(toSecond + toFirst);
+        return $"「{firstName}」与「{secondName}」互击：{toSecond} + {toFirst} 点伤害";
+    }
+
+    /// <summary>消灭:指定目标或随机目标</summary>
+    private static string ApplyDestroy(CardEffect effect, Caster caster, FieldUnit primaryUnit)
+    {
+        FieldUnit target;
+        if (effect.scope == CardEffectScope.Random)
+        {
+            target = PickRandomEnemyUnit(caster);
+        }
+        else
+        {
+            target = primaryUnit;
+            if (target == null || target.Side == caster.side || !target.IsUnit || !target.IsAlive)
+                target = PickStrongestEnemyUnit(caster);
+        }
+
+        if (target == null) return null;
+
+        string name = target.DisplayName;
+        BattleSettlement.KillUnit(target);
+        return caster.side == BattleSide.Player ? $"消灭了「{name}」" : $"我方「{name}」被消灭";
+    }
+
+    /// <summary>后置授予词条:血战/守护/连战/闪击走运行时 overlay;重甲1 直接加一层</summary>
+    private static string ApplyGrantKeyword(CardEffect effect, Caster caster, FieldUnit primaryUnit)
+    {
+        var target = primaryUnit;
+        if (target == null || target.Side != caster.side || !target.IsUnit || !target.IsAlive)
+            target = PickAutoTarget(caster, ally: true);
+        if (target == null) return null;
+
+        if (effect.keyword == Keyword.HeavyArmor)
+            target.SetHeavyArmor(target.HeavyArmor + 1);
+        else
+            target.GrantKeyword(effect.keyword);
+
+        // 日志/飘字用中文词条名(直接插值枚举会打出 BloodBattle / HeavyArmor 这种英文)
+        string keywordName = KeywordInfo.Name(effect.keyword);
+        return caster.side == BattleSide.Player
+            ? $"「{target.DisplayName}」获得「{keywordName}」"
+            : $"对方「{target.DisplayName}」获得「{keywordName}」";
+    }
+
+    // ---------------------------------------------------------------- 条件效果
+
+    private static bool ConditionMet(CardEffect effect, Caster caster)
+    {
+        switch (effect.condition)
+        {
+            case CardEffectCondition.EnemyUnitsMore:
+                return EnemyUnitCount(caster) > AllyUnitCount(caster);
+
+            case CardEffectCondition.EnemyUnitsAtLeast:
+                return EnemyUnitCount(caster) >= effect.conditionValue;
+
+            case CardEffectCondition.CampHpAtMost:
+            {
+                var camp = BattleSettlement.FindCamp(caster.side);
+                return camp != null && camp.Hp <= effect.conditionValue;
+            }
+
+            case CardEffectCondition.EnemyHandAtLeast:
+                return OpponentHandCount(caster) >= effect.conditionValue;
+
+            default:
+                return true;
+        }
+    }
+
     // ---------------------------------------------------------------- 回血 / 维修
 
     /// <summary>
@@ -581,8 +804,8 @@ public static class CardEffectResolver
     /// 目标的决定顺序:
     ///   1. 玩家指定的那个目标(primaryUnit),只要它确实是友方、且还活着 —— 拖到己方建筑上就是修建筑,拖到兵牌上就是回兵牌;
     ///   2. scope == Caster(「为一座己方建筑回复 7 点 HP」这种无目标写法)/ 第 1 个目标不可用时:
-    ///      按目标类型自动挑 —— 建筑优先挑最该修的(PickRepairableBuilding),兵牌挑最该回的(PickAutoTarget);
-    ///   3. 都没有就退到大营。
+///      按目标类型自动挑 —— 建筑优先挑最该修的(PickRepairableBuilding),兵牌挑**缺血最多**的(PickHealTarget);
+///   3. 都没有、且大营确实掉了血,才退到大营。
     /// 「被摧毁的建筑」只有维修卡修得回来(对齐卡面血量 + 1 回合无敌,§7.3)。
     /// </summary>
     private static string ApplyHeal(CardEffect effect, Caster caster, FieldUnit primaryUnit)
@@ -595,13 +818,19 @@ public static class CardEffectResolver
 
         if (!primaryUsable)
         {
-            // 自动挑:先建筑(维修优先,含被摧毁的),再兵牌,最后大营
+            // 自动挑:先建筑(维修优先,含被摧毁的),再**真的掉了血**的兵牌,最后才是掉血的大营。
+            // 兵牌这里一定要用 PickHealTarget(按缺血量挑),不能拿 PickAutoTarget(按 ATK 挑)——
+            // 后者会挑到满血的大哥,回 0 点,玩家看到的就是"牌打出去了,什么都没发生"。
             target = PickRepairableBuilding(caster);
-            if (target == null) target = PickAutoTarget(caster, ally: true);
-            if (target == null) target = BattleSettlement.FindCamp(caster.side);
+            if (target == null) target = PickHealTarget(caster);
+            if (target == null && IsCampHurt(caster)) target = BattleSettlement.FindCamp(caster.side);
         }
 
-        if (target == null) return null;
+        if (target == null)
+        {
+            if (primaryUnit != null && primaryUnit.Side != caster.side) return null;
+            return "没有需要治疗的友方单位（都已满血）";
+        }
 
         // §7.3 维修卡:除了回血,还给建筑 1 回合无敌,防止同一回合反复用低费修缮卡刷建筑。
         // 判据 = 「这张牌的第一目标本来就是己方建筑」—— 兵牌效果里没有修自己建筑的写法。
@@ -612,6 +841,13 @@ public static class CardEffectResolver
             // 已经被摧毁的建筑:维修卡把它「修回来」并对齐到卡面血量,顺带给无敌
             if (!target.IsAlive)
             {
+                // 军械库 / 粮草:只可被摧毁一次,摧毁后不能修回来
+                if (target.BuildingName == BattleRules.ArsenalName ||
+                    target.BuildingName == BattleRules.GranaryName)
+                {
+                    return $"「{target.BuildingName}」已被摧毁,无法修复";
+                }
+
                 int restore = Mathf.Max(effect.amount, target.MaxHp);
                 target.ClearWrecked();
                 target.SetHp(restore);
@@ -636,7 +872,11 @@ public static class CardEffectResolver
 
         // 兵牌 / 大营:直接回血
         int healed = BattleSettlement.Heal(target, effect.amount);
-        if (healed <= 0) return null;
+        if (healed <= 0)
+        {
+            // 目标满血:别返回 null(那会变成一句没有信息量的「已结算」),明说回不上
+            return target.IsCamp ? "大营已是满血" : $"「{target.DisplayName}」已是满血";
+        }
 
         // 回血还被「守护」挡着吗?不 —— 治疗是友方效果,守护只挡选中敌方目标(§4.3)
         if (target.IsCamp) return $"大营回复 {healed} 点 HP";
@@ -807,6 +1047,80 @@ public static class CardEffectResolver
         return bestScore > 0 ? best : null;
     }
 
+    /// <summary>斩首:敌方 ATK 最高的兵牌(被守护的跳过)</summary>
+    private static FieldUnit PickStrongestEnemyUnit(Caster caster)
+    {
+        var units = UnitsOf(caster.EnemySide);
+        FieldUnit best = null;
+        int bestAtk = int.MinValue;
+
+        for (int i = 0; i < units.Count; i++)
+        {
+            var unit = units[i];
+            if (unit == null || !unit.IsUnit || !unit.IsAlive) continue;
+            if (BattleRules.IsGuarded(unit, out _)) continue;
+            if (unit.Atk > bestAtk) { bestAtk = unit.Atk; best = unit; }
+        }
+        return best;
+    }
+
+    /// <summary>两敌互击的第二目标:另一个敌方兵牌(不与 first 相同)</summary>
+    private static FieldUnit PickSecondEnemyUnit(Caster caster, FieldUnit first)
+    {
+        var units = UnitsOf(caster.EnemySide);
+        FieldUnit best = null;
+        int bestScore = int.MinValue;
+
+        for (int i = 0; i < units.Count; i++)
+        {
+            var unit = units[i];
+            if (unit == null || unit == first || !unit.IsUnit || !unit.IsAlive) continue;
+            int score = unit.Atk * 10 + unit.Hp;
+            if (score > bestScore) { bestScore = score; best = unit; }
+        }
+        return best;
+    }
+
+    /// <summary>双排伤害的第二排:另一条站着敌方单位的排</summary>
+    private static BattleRow PickSecondEnemyRow(Caster caster, BattleRow exclude)
+    {
+        var board = BattleSettlement.Board;
+        if (board == null) return null;
+
+        BattleRow best = null;
+        int bestScore = int.MinValue;
+
+        var rows = board.Rows;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row == null || row == exclude) continue;
+
+            int score = 0;
+            var members = row.Units;
+            for (int j = 0; j < members.Count; j++)
+            {
+                var m = members[j];
+                if (m == null || !m.IsAlive || m.Side == caster.side) continue;
+                score += 10 + m.Atk + m.Hp;
+            }
+            if (score > bestScore) { bestScore = score; best = row; }
+        }
+        return bestScore > 0 ? best : null;
+    }
+
+    private static int EnemyUnitCount(Caster caster) => UnitCount(caster.EnemySide);
+    private static int AllyUnitCount(Caster caster) => UnitCount(caster.side);
+
+    private static int UnitCount(BattleSide side)
+    {
+        var units = UnitsOf(side);
+        int n = 0;
+        for (int i = 0; i < units.Count; i++)
+            if (units[i] != null && units[i].IsUnit && units[i].IsAlive) n++;
+        return n;
+    }
+
     // ================================================================ 小工具
 
     /// <summary>
@@ -879,6 +1193,51 @@ public static class CardEffectResolver
             if (b != null && (b.Hp < b.MaxHp || !b.IsAlive)) return true;
         }
         return false;
+    }
+
+    /// <summary>己方大营是不是真的掉了血(治疗类卡能不能打,要看它,不能只看"大营在不在")</summary>
+    private static bool IsCampHurt(Caster caster)
+    {
+        var camp = BattleSettlement.FindCamp(caster.side);
+        return camp != null && camp.Hp < camp.MaxHp;
+    }
+
+    /// <summary>
+    /// 这一排里有没有**敌方**的活目标(整排伤害类卡能不能落地的判据)。
+    /// 前军是双方共享的一条排,所以不能只判"排不为空" —— 排里可能全是自己人。
+    /// </summary>
+    private static bool RowHasTarget(BattleRow row, Caster caster)
+    {
+        if (row == null) return false;
+        var members = BattleRules.Snapshot(row);
+        for (int i = 0; i < members.Count; i++)
+        {
+            var m = members[i];
+            if (m != null && m.IsAlive && m.Side != caster.side) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 自动挑一个「最该治疗」的友方兵牌:优先看掉了多少血(而不是攻击力高低),
+    /// 满血的直接跳过 —— 否则会把治疗甩给一个满血大哥,回 0 点,看着就像"没生效"。
+    /// </summary>
+    private static FieldUnit PickHealTarget(Caster caster)
+    {
+        var units = UnitsOf(caster.side);
+        FieldUnit best = null;
+        int bestMissing = 0;
+
+        for (int i = 0; i < units.Count; i++)
+        {
+            var u = units[i];
+            if (u == null || !u.IsUnit || !u.IsAlive) continue;
+
+            int missing = u.MaxHp - u.Hp;
+            if (missing <= 0) continue;
+            if (missing > bestMissing) { bestMissing = missing; best = u; }
+        }
+        return best;
     }
 
     private static int OpponentHandCount(Caster caster) => new Caster(caster.EnemySide).HandCount;

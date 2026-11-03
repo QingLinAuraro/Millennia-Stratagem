@@ -1,0 +1,32 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bfcf2cc80a34fa94dadbc55e6db77a79, type: 3}
+  m_Name: qin_u_18
+  m_EditorClassIdentifier: 
+  cardId: qin_u_18
+  cardName: 伐荆锐士
+  dynasty: 秦
+  rarity: 3
+  cardType: 0
+  artwork: {fileID: 21300000, guid: a330acddf58ac8247561b6d7ce475cf7, type: 3}
+  flavorText: 
+  effectText: 
+  deploymentCost: 8
+  actionCost: 2
+  actionCount: 1
+  atk: 7
+  hp: 6
+  unitType: 0
+  weight: 2
+  keywords:
+  - 2
+  targetType: 0

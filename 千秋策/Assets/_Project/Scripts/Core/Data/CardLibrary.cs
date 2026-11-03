@@ -20,6 +20,12 @@ public class CardLibrary : ScriptableObject
     /// <summary>卡牌资产所在的 Resources 子目录(相对 Assets/_Project/Resources)</summary>
     public const string CardsResourcePath = "Cards";
 
+    /// <summary>
+    /// 补位卡池的朝代名。它不属于任何一个可当"主朝代"的阵营(没有传说卡,凑不出配额),
+    /// 构筑/AI 随机选主朝代时必须排除,只在"通用补位"时按需取用。
+    /// </summary>
+    public const string CommonDynasty = "通用";
+
     public List<CardData> cards = new List<CardData>();
 
     private static CardLibrary current;
